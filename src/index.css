@@ -1,0 +1,35 @@
+html {
+  /* Stop iOS from re-flowing text when the phone rotates. */
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100dvh;
+  background: #2c3531;
+}
+
+body {
+  /* No rubber-band overscroll revealing white behind the app. */
+  overscroll-behavior-y: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+  /* Skip the 300ms mobile click delay. */
+  touch-action: manipulation;
+}
+
+input,
+textarea {
+  /* Anything under 16px makes iOS zoom the page on focus. */
+  font-size: 16px;
+}
