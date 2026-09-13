@@ -585,34 +585,41 @@ function MoodScrubber({ index, onChange }) {
           border: `1px solid ${colors.border}`,
           background: colors.bg,
           overflow: 'hidden',
-          // Neighbouring moods peek in from the edges and fade out.
-          maskImage: 'linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent)',
-          WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent)',
         }}
       >
-        {MOOD_SCALE.map((m, i) => (
-          <div
-            key={m.key}
-            className="pmm-mood-label"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              // 58% of the window keeps the neighbours clear of the centred label.
-              transform: `translateX(${(i - index) * 58}%)`,
-              transition: 'transform 260ms cubic-bezier(0.22,0.61,0.36,1), opacity 200ms ease',
-              opacity: i === index ? 1 : 0.3,
-              fontFamily: "'Fraunces', serif",
-              fontWeight: 600,
-              fontSize: '21px',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {m.label}
-          </div>
-        ))}
+        {/* The mask sits inside the frame so it fades the peeking moods, not the border. */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            maskImage: 'linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent)',
+            WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent)',
+          }}
+        >
+          {MOOD_SCALE.map((m, i) => (
+            <div
+              key={m.key}
+              className="pmm-mood-label"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                // 46% of the window shows a slice of each neighbour without crowding the centre.
+                transform: `translateX(${(i - index) * 46}%)`,
+                transition: 'transform 260ms cubic-bezier(0.22,0.61,0.36,1), opacity 200ms ease',
+                opacity: i === index ? 1 : 0.45,
+                fontFamily: "'Fraunces', serif",
+                fontWeight: 600,
+                fontSize: '21px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {m.label}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{ position: 'relative', marginTop: '6px' }}>
