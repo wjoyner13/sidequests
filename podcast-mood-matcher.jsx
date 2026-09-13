@@ -158,9 +158,14 @@ export default function PodcastMoodMatcher() {
   }
 
   async function findEpisodes() {
+    const typedNow = topicInput.trim();
     const searchTopic = commitTypedTopic() ?? topic;
 
-    setLastSearch({ mood: mood.label, topic: searchTopic });
+    setLastSearch({
+      mood: mood.label,
+      topic: searchTopic,
+      typed: Boolean(typedNow) || customTopics.includes(searchTopic),
+    });
     setError(null);
     setPhase('searching');
 
@@ -234,6 +239,39 @@ export default function PodcastMoodMatcher() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         .pmm-pill { transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
         .pmm-scroll::-webkit-scrollbar { height: 0; }
+        .pmm-carousel {
+          position: relative;
+          /* Bleed to the card edge so peeking pills can fade off the sides. */
+          margin: 0 -16px;
+        }
+        .pmm-carousel::before,
+        .pmm-carousel::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          bottom: 2px;
+          width: 24px;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .pmm-carousel::before {
+          left: 0;
+          background: linear-gradient(90deg, ${colors.surface} 0%, transparent 100%);
+        }
+        .pmm-carousel::after {
+          right: 0;
+          background: linear-gradient(270deg, ${colors.surface} 0%, transparent 100%);
+        }
+        .pmm-carousel .pmm-scroll {
+          display: flex;
+          gap: 8px;
+          overflow-x: auto;
+          scroll-snap-type: x proximity;
+          scrollbar-width: none;
+          /* Left inset keeps the first pill off the card edge; no matching
+             right inset, so the last in-view pill is clipped as a carousel cue. */
+          padding: 0 36px 2px 28px;
+        }
         .pmm-btn:active { transform: translateY(1px); }
         @keyframes pmm-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
         @keyframes pmm-spin { to { transform: rotate(360deg); } }
@@ -475,26 +513,6 @@ export default function PodcastMoodMatcher() {
                 Find podcast
               </button>
             </section>
-
-            {results.length > 0 && (
-              <button
-                className="pmm-btn"
-                onClick={() => setPhase('results')}
-                style={{
-                  width: '100%',
-                  minHeight: '44px',
-                  padding: '11px',
-                  borderRadius: '999px',
-                  border: `1px solid ${colors.border}`,
-                  background: 'transparent',
-                  color: colors.text,
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                This session's matches ({results.length})
-              </button>
-            )}
           </>
         ) : (
           <section>
@@ -660,63 +678,70 @@ function MoodScrubber({ index, onChange }) {
 
 function TopicCarousel({ options, selected, onSelect }) {
   return (
-    <div
-      className="pmm-scroll"
-      role="radiogroup"
-      aria-label="Topic"
-      style={{
-        display: 'flex',
-        gap: '8px',
-        overflowX: 'auto',
-        scrollSnapType: 'x proximity',
-        paddingBottom: '2px',
-        // Bleed to the card edge so pills scroll out of view instead of stopping short.
-        margin: '0 -16px',
-        padding: '0 16px 2px',
-        scrollbarWidth: 'none',
-      }}
-    >
-      {options.map((option) => {
-        const active = option === selected;
-        return (
-          <button
-            key={option}
-            className="pmm-pill"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onSelect(option)}
-            style={{
-              flexShrink: 0,
-              scrollSnapAlign: 'start',
-              minHeight: '40px',
-              padding: '8px 16px',
-              borderRadius: '999px',
-              fontSize: '13.5px',
-              cursor: 'pointer',
-              border: `1px solid ${active ? colors.selectedBorder : colors.border}`,
-              background: active ? colors.selectedFill : 'transparent',
-              color: colors.text,
-              fontWeight: active ? 500 : 400,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {option}
-          </button>
-        );
-      })}
+    <div className="pmm-carousel">
+      <div className="pmm-scroll" role="radiogroup" aria-label="Topic">
+        {options.map((option) => {
+          const active = option === selected;
+          return (
+            <button
+              key={option}
+              className="pmm-pill"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onSelect(option)}
+              style={{
+                flexShrink: 0,
+                scrollSnapAlign: 'start',
+                minHeight: '40px',
+                padding: '8px 16px',
+                borderRadius: '999px',
+                fontSize: '13.5px',
+                cursor: 'pointer',
+                border: `1px solid ${active ? colors.selectedBorder : colors.border}`,
+                background: active ? colors.selectedFill : 'transparent',
+                color: colors.text,
+                fontWeight: active ? 500 : 400,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
+function listenClause(topic, typed) {
+  const t = topic.trim();
+  const lower = t.toLowerCase();
+
+  if (/^something\s+about\s+/i.test(lower)) return t;
+  if (/^about\s+/i.test(lower)) return `something ${lower}`;
+
+  // Typed how-to / questions already read as the thing to listen to.
+  if (typed && /^(how|why|what|when|where|who|which|to)\b/i.test(lower)) return t;
+
+  return `something about ${t}`;
+}
+
 function SearchRecap({ search }) {
   if (!search) return null;
+  const mood = search.mood.toLowerCase();
+  const topic = search.topic?.trim();
+  const clause = topic ? listenClause(topic, search.typed) : null;
+  const aboutPrefix = clause?.startsWith('something about ') ? 'something about ' : null;
+  const highlight = aboutPrefix ? clause.slice(aboutPrefix.length) : clause;
+
   return (
     <p style={{ fontFamily: "'Fraunces', serif", fontWeight: 500, fontSize: '22px', lineHeight: 1.4, margin: 0 }}>
-      Something for feeling <span style={{ color: colors.accent }}>{search.mood.toLowerCase()}</span>
-      {search.topic ? (
+      I&apos;m feeling <span style={{ color: colors.accent }}>{mood}</span>
+      {clause ? (
         <>
           {' '}
-          about <span style={{ color: colors.accent }}>{search.topic}</span>
+          and I want to listen to {aboutPrefix}
+          <span style={{ color: colors.accent }}>{highlight}</span>
         </>
       ) : null}
       .
