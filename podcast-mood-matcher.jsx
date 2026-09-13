@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import scrubberHandle from './src/assets/scrubber-handle.svg';
 
 // Ordered low to high energy/direction: the scrubber reads left to right.
 const MOOD_SCALE = [
@@ -144,27 +145,34 @@ export default function PodcastMoodMatcher() {
   }, [phase]);
 
   function selectTopic(next) {
-    setTopic((prev) => (prev === next ? null : next));
+    setTopic((prev) => {
+      if (prev === next) {
+        setTopicInput('');
+        return null;
+      }
+      setTopicInput(next);
+      return next;
+    });
   }
 
-  // A typed topic joins the carousel so it can be reselected later.
-  function commitTypedTopic() {
-    const typed = topicInput.trim().toLowerCase();
-    if (!typed) return null;
-    setCustomTopics((prev) => (TOPICS.includes(typed) || prev.includes(typed) ? prev : [typed, ...prev]));
-    setTopic(typed);
-    setTopicInput('');
-    return typed;
+  function onTopicInputChange(value) {
+    setTopicInput(value);
+    if (topic) setTopic(null);
   }
 
   async function findEpisodes() {
-    const typedNow = topicInput.trim();
-    const searchTopic = commitTypedTopic() ?? topic;
+    const q = topicInput.trim();
+    if (!q) return;
+
+    const known = topic ?? (TOPICS.includes(q.toLowerCase()) || customTopics.includes(q.toLowerCase()) ? q.toLowerCase() : null);
+    if (!known && !TOPICS.includes(q.toLowerCase())) {
+      setCustomTopics((prev) => (prev.includes(q.toLowerCase()) ? prev : [q.toLowerCase(), ...prev]));
+    }
 
     setLastSearch({
       mood: mood.label,
-      topic: searchTopic,
-      typed: Boolean(typedNow) || customTopics.includes(searchTopic),
+      topic: q,
+      typed: !known,
     });
     setError(null);
     setPhase('searching');
@@ -175,7 +183,11 @@ export default function PodcastMoodMatcher() {
     try {
       const data = await api('/api/recommend', {
         method: 'POST',
-        body: JSON.stringify({ mood: mood.key, topics: searchTopic ? [searchTopic] : [], query: '' }),
+        body: JSON.stringify({
+          mood: mood.key,
+          topics: known ? [known] : [],
+          query: q,
+        }),
         timeoutMs: SEARCH_TIMEOUT_MS,
         signal: controller.signal,
       });
@@ -311,30 +323,47 @@ export default function PodcastMoodMatcher() {
           border-radius: 999px;
           background: rgba(242,240,234,0.28);
         }
-        .pmm-range::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          width: 30px;
-          height: 22px;
-          margin-top: -10px;
-          border-radius: 999px;
-          border: 1px solid ${colors.selectedBorder};
-          background: ${colors.text};
-          box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-        }
         .pmm-range::-moz-range-track {
           height: 2px;
           border-radius: 999px;
           background: rgba(242,240,234,0.28);
         }
-        .pmm-range::-moz-range-thumb {
-          width: 28px;
-          height: 20px;
-          border-radius: 999px;
-          border: 1px solid ${colors.selectedBorder};
-          background: ${colors.text};
+        .pmm-range::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          /* Matches the Figma asset box (79×41.5 scaled so the capsule stays ~22px on the 2px track). */
+          width: 46px;
+          height: 24px;
+          margin-top: -11px;
+          border: none;
+          border-radius: 0;
+          background: transparent;
         }
-        .pmm-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(217,164,65,0.4); }
-        .pmm-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px rgba(217,164,65,0.4); }
+        .pmm-range::-moz-range-thumb {
+          width: 46px;
+          height: 24px;
+          border: none;
+          border-radius: 0;
+          background: transparent;
+        }
+        .pmm-range:focus-visible ~ .pmm-handle-slot .pmm-handle {
+          filter: drop-shadow(0 0 0 4px rgba(217,164,65,0.4));
+        }
+
+        .pmm-handle {
+          position: absolute;
+          top: 50%;
+          width: 46px;
+          height: 24px;
+          transform: translate(-50%, -50%);
+          pointer-events: none;
+          z-index: 2;
+          transition: left 160ms cubic-bezier(0.22,0.61,0.36,1);
+        }
+        .pmm-handle img {
+          display: block;
+          width: 46px;
+          height: 24px;
+        }
 
         .pmm-modal {
           position: fixed;
@@ -360,7 +389,7 @@ export default function PodcastMoodMatcher() {
       `}</style>
 
       <div className="pmm-page">
-        <div style={{ marginBottom: '20px' }}>
+        <div style={{ marginBottom: '20px', textAlign: 'center' }}>
           <h1
             style={{
               fontFamily: "'Fraunces', serif",
@@ -370,7 +399,7 @@ export default function PodcastMoodMatcher() {
               letterSpacing: '-0.01em',
             }}
           >
-            Mood Matches
+            MoodFlo
           </h1>
           <p style={{ color: colors.textMuted, fontSize: '14px', marginTop: '6px', lineHeight: 1.5 }}>
             Say what you're in the mood for, get real episodes, rate them so the good ones stick.
@@ -454,11 +483,11 @@ export default function PodcastMoodMatcher() {
                   <input
                     placeholder="Enter a topic…"
                     value={topicInput}
-                    onChange={(e) => setTopicInput(e.target.value)}
+                    onChange={(e) => onTopicInputChange(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        commitTypedTopic();
+                        findEpisodes();
                       }
                     }}
                     aria-label="Enter a topic"
@@ -466,8 +495,8 @@ export default function PodcastMoodMatcher() {
                   />
                   <button
                     className="pmm-btn"
-                    onClick={commitTypedTopic}
-                    aria-label="Add this topic"
+                    onClick={findEpisodes}
+                    aria-label="Find podcast"
                     disabled={!topicInput.trim()}
                     style={{
                       position: 'absolute',
@@ -480,38 +509,18 @@ export default function PodcastMoodMatcher() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       borderRadius: '999px',
-                      border: `1px solid ${colors.selectedBorder}`,
-                      background: colors.selectedFill,
-                      color: colors.text,
+                      border: 'none',
+                      background: topicInput.trim() ? colors.accent : colors.selectedFill,
+                      color: topicInput.trim() ? colors.bg : colors.textMuted,
                       fontSize: '15px',
                       lineHeight: 1,
                       cursor: topicInput.trim() ? 'pointer' : 'default',
-                      opacity: topicInput.trim() ? 1 : 0.4,
                     }}
                   >
                     ↑
                   </button>
                 </div>
               </Field>
-
-              <button
-                className="pmm-btn"
-                onClick={findEpisodes}
-                style={{
-                  width: '100%',
-                  minHeight: '48px',
-                  padding: '13px',
-                  borderRadius: '999px',
-                  border: 'none',
-                  background: colors.accent,
-                  color: colors.bg,
-                  fontWeight: 600,
-                  fontSize: '15px',
-                  cursor: 'pointer',
-                }}
-              >
-                Find podcast
-              </button>
             </section>
           </>
         ) : (
@@ -641,7 +650,7 @@ function MoodScrubber({ index, onChange }) {
       </div>
 
       <div style={{ position: 'relative', marginTop: '6px' }}>
-        <div aria-hidden="true" style={{ position: 'absolute', inset: '0 15px', pointerEvents: 'none' }}>
+        <div aria-hidden="true" style={{ position: 'absolute', inset: '0 23px', pointerEvents: 'none' }}>
           {MOOD_SCALE.map((m, i) => (
             <span
               key={m.key}
@@ -671,6 +680,15 @@ function MoodScrubber({ index, onChange }) {
           aria-label="Mood"
           aria-valuetext={MOOD_SCALE[index].label}
         />
+
+        <div className="pmm-handle-slot" aria-hidden="true" style={{ position: 'absolute', inset: '0 23px', pointerEvents: 'none' }}>
+          <div
+            className="pmm-handle"
+            style={{ left: `${(index / (MOOD_SCALE.length - 1)) * 100}%` }}
+          >
+            <img src={scrubberHandle} alt="" width={46} height={24} />
+          </div>
+        </div>
       </div>
     </div>
   );
