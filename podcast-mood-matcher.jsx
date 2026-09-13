@@ -46,7 +46,9 @@ const colors = {
   danger: '#E39B87',
 };
 
-const SEARCH_TIMEOUT_MS = 150_000;
+// Netlify kills a synchronous function at 60s, so waiting longer than that
+// only leaves the user staring at a spinner.
+const SEARCH_TIMEOUT_MS = 70_000;
 
 async function api(path, options = {}) {
   const { timeoutMs = 20_000, ...init } = options;
@@ -86,7 +88,6 @@ export default function PodcastMoodMatcher() {
   const [searching, setSearching] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(null);
-  const [store, setStore] = useState(null);
 
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -109,10 +110,10 @@ export default function PodcastMoodMatcher() {
     if (view === 'history') loadHistory();
   }, [view, loadHistory]);
 
+  // Surfaces a misconfigured deploy (missing keys, missing table) up front
+  // rather than waiting for the first search to fail.
   useEffect(() => {
-    api('/api/status')
-      .then((data) => setStore(data.store))
-      .catch(() => {});
+    api('/api/status').catch((e) => setError(e.message));
   }, []);
 
   useEffect(() => {
@@ -143,7 +144,6 @@ export default function PodcastMoodMatcher() {
         timeoutMs: SEARCH_TIMEOUT_MS,
       });
       setResults((prev) => [...data.episodes, ...prev]);
-      if (data.store) setStore(data.store);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -262,24 +262,6 @@ export default function PodcastMoodMatcher() {
             </button>
           ))}
         </div>
-
-        {store === 'local-file' && (
-          <div
-            style={{
-              fontSize: '12px',
-              color: colors.textMuted,
-              background: 'rgba(242,240,234,0.06)',
-              border: `1px solid ${colors.border}`,
-              borderRadius: '8px',
-              padding: '8px 12px',
-              marginBottom: '18px',
-              lineHeight: 1.5,
-            }}
-          >
-            Saving locally — the Supabase <code>episodes</code> table doesn't exist yet. Run{' '}
-            <code>supabase/episodes.sql</code> and restart to switch over.
-          </div>
-        )}
 
         {error && (
           <div

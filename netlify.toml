@@ -1,0 +1,15 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Routes live on each function via `config.path`. No catch-all rewrite —
+# a /* → index.html rule can swallow /api/* on some deploys, which is
+# exactly the 404 the user hit. This app has no client-side routes.
+
