@@ -1,20 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-const MOODS = {
-  excited: 'Lots of energy, figuring out what to do with it',
-  focused: "Locked in, I know what I'm working on",
-  basic: 'Mindless task — something fun that needs no thinking',
-  worried: 'Nervous about something, need encouragement',
-  curious: 'Motivated and looking to learn',
-  bored: 'Need a pick-me-up',
-  distracted: 'Mind is scattered, need help focusing',
-};
+// Ordered low to high energy/direction: the scrubber reads left to right.
+const MOOD_SCALE = [
+  { key: 'unfocused', label: 'Unfocused', description: 'Mind is scattered, need help focusing' },
+  { key: 'worried', label: 'Worried', description: 'Nervous about something, need encouragement' },
+  { key: 'bored', label: 'Bored', description: 'Need a pick-me-up' },
+  { key: 'curious', label: 'Curious', description: 'Motivated and looking to learn' },
+  { key: 'focused', label: 'Focused', description: "Locked in, I know what I'm working on" },
+];
 
-const MOOD_OPTIONS = Object.keys(MOODS);
+const DEFAULT_MOOD_INDEX = 3;
 
-const PRIMARY_TOPICS = ['leadership', 'mental health', 'creativity'];
-
-const MORE_TOPICS = [
+const TOPICS = [
+  'leadership',
+  'mental health',
+  'creativity',
   'executive presence',
   'design',
   'career',
@@ -51,9 +51,11 @@ const colors = {
 const SEARCH_TIMEOUT_MS = 70_000;
 
 async function api(path, options = {}) {
-  const { timeoutMs = 20_000, ...init } = options;
+  const { timeoutMs = 20_000, signal, ...init } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const relay = () => controller.abort();
+  signal?.addEventListener('abort', relay);
 
   try {
     const res = await fetch(path, {
@@ -68,30 +70,37 @@ async function api(path, options = {}) {
     return res.status === 204 ? null : res.json();
   } catch (e) {
     if (e.name === 'AbortError') {
+      if (signal?.aborted) throw Object.assign(new Error('Search cancelled'), { cancelled: true });
       throw new Error(`Gave up after ${Math.round(timeoutMs / 1000)}s. The server may still be searching — try again.`);
     }
     throw e;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', relay);
   }
 }
 
 export default function PodcastMoodMatcher() {
   const [view, setView] = useState('discover');
 
-  const [mood, setMood] = useState('curious');
-  const [topics, setTopics] = useState([]);
+  const [moodIndex, setMoodIndex] = useState(DEFAULT_MOOD_INDEX);
+  const [topic, setTopic] = useState(null);
+  const [customTopics, setCustomTopics] = useState([]);
   const [topicInput, setTopicInput] = useState('');
-  const [showMoreTopics, setShowMoreTopics] = useState(false);
 
+  // 'idle' shows the page; 'searching' and 'results' each take over the screen.
+  const [phase, setPhase] = useState('idle');
   const [results, setResults] = useState([]);
-  const [searching, setSearching] = useState(false);
+  const [lastSearch, setLastSearch] = useState(null);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(null);
+  const searchRef = useRef(null);
 
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyMood, setHistoryMood] = useState('all');
+
+  const mood = MOOD_SCALE[moodIndex];
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -117,38 +126,71 @@ export default function PodcastMoodMatcher() {
   }, []);
 
   useEffect(() => {
-    if (!searching) return;
+    if (phase !== 'searching') return;
     setElapsed(0);
     const started = Date.now();
     const timer = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
     return () => clearInterval(timer);
-  }, [searching]);
+  }, [phase]);
 
-  function toggleTopic(t) {
-    setTopics((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  // The page behind a full-screen modal must not scroll under it.
+  useEffect(() => {
+    if (phase === 'idle') return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [phase]);
+
+  function selectTopic(next) {
+    setTopic((prev) => (prev === next ? null : next));
+  }
+
+  // A typed topic joins the carousel so it can be reselected later.
+  function commitTypedTopic() {
+    const typed = topicInput.trim().toLowerCase();
+    if (!typed) return null;
+    setCustomTopics((prev) => (TOPICS.includes(typed) || prev.includes(typed) ? prev : [typed, ...prev]));
+    setTopic(typed);
+    setTopicInput('');
+    return typed;
   }
 
   async function findEpisodes() {
-    // Fold anything still sitting in the input into this search.
-    const typed = topicInput.trim().toLowerCase();
-    const searchTopics = typed && !topics.includes(typed) ? [...topics, typed] : topics;
-    setTopics(searchTopics);
-    setTopicInput('');
+    const typedNow = topicInput.trim();
+    const searchTopic = commitTypedTopic() ?? topic;
 
-    setSearching(true);
+    setLastSearch({
+      mood: mood.label,
+      topic: searchTopic,
+      typed: Boolean(typedNow) || customTopics.includes(searchTopic),
+    });
     setError(null);
+    setPhase('searching');
+
+    const controller = new AbortController();
+    searchRef.current = controller;
+
     try {
       const data = await api('/api/recommend', {
         method: 'POST',
-        body: JSON.stringify({ mood, topics: searchTopics, query: '' }),
+        body: JSON.stringify({ mood: mood.key, topics: searchTopic ? [searchTopic] : [], query: '' }),
         timeoutMs: SEARCH_TIMEOUT_MS,
+        signal: controller.signal,
       });
       setResults((prev) => [...data.episodes, ...prev]);
+      setPhase('results');
     } catch (e) {
-      setError(e.message);
+      if (!e.cancelled) setError(e.message);
+      setPhase('idle');
     } finally {
-      setSearching(false);
+      searchRef.current = null;
     }
+  }
+
+  function cancelSearch() {
+    searchRef.current?.abort();
   }
 
   async function rate(id, rating) {
@@ -173,10 +215,7 @@ export default function PodcastMoodMatcher() {
     }
   }
 
-  // Anything already selected stays visible even while the extra topics are collapsed.
-  const visibleTopics = Array.from(
-    new Set([...PRIMARY_TOPICS, ...(showMoreTopics ? MORE_TOPICS : []), ...topics])
-  );
+  const topicOptions = Array.from(new Set([...customTopics, ...TOPICS]));
 
   const historyMoods = Array.from(new Set(history.map((ep) => ep.mood))).sort();
   const visibleHistory = [...(historyMood === 'all' ? history : history.filter((ep) => ep.mood === historyMood))].sort(
@@ -200,8 +239,45 @@ export default function PodcastMoodMatcher() {
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
         .pmm-pill { transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
         .pmm-scroll::-webkit-scrollbar { height: 0; }
+        .pmm-carousel {
+          position: relative;
+          /* Bleed to the card edge so peeking pills can fade off the sides. */
+          margin: 0 -16px;
+        }
+        .pmm-carousel::before,
+        .pmm-carousel::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          bottom: 2px;
+          width: 24px;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .pmm-carousel::before {
+          left: 0;
+          background: linear-gradient(90deg, ${colors.surface} 0%, transparent 100%);
+        }
+        .pmm-carousel::after {
+          right: 0;
+          background: linear-gradient(270deg, ${colors.surface} 0%, transparent 100%);
+        }
+        .pmm-carousel .pmm-scroll {
+          display: flex;
+          gap: 8px;
+          overflow-x: auto;
+          scroll-snap-type: x proximity;
+          scrollbar-width: none;
+          /* Left inset keeps the first pill off the card edge; no matching
+             right inset, so the last in-view pill is clipped as a carousel cue. */
+          padding: 0 36px 2px 28px;
+        }
         .pmm-btn:active { transform: translateY(1px); }
         @keyframes pmm-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+        @keyframes pmm-spin { to { transform: rotate(360deg); } }
+        @keyframes pmm-sweep { 0% { transform: translateX(-60%); } 100% { transform: translateX(260%); } }
+        @keyframes pmm-fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes pmm-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 
         .pmm-page {
           max-width: 480px;
@@ -215,6 +291,71 @@ export default function PodcastMoodMatcher() {
         @media (max-width: 359px) {
           /* Three rating buttons stop fitting side by side on the smallest phones. */
           .pmm-rate { flex-direction: column; }
+        }
+
+        /* Mood scrubber: one native range input, restyled so the thumb lands on a notch. */
+        .pmm-range {
+          -webkit-appearance: none;
+          appearance: none;
+          position: relative;
+          display: block;
+          width: 100%;
+          height: 44px;
+          margin: 0;
+          background: transparent;
+          cursor: pointer;
+        }
+        .pmm-range:focus { outline: none; }
+        .pmm-range::-webkit-slider-runnable-track {
+          height: 2px;
+          border-radius: 999px;
+          background: rgba(242,240,234,0.28);
+        }
+        .pmm-range::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 30px;
+          height: 22px;
+          margin-top: -10px;
+          border-radius: 999px;
+          border: 1px solid ${colors.selectedBorder};
+          background: ${colors.text};
+          box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }
+        .pmm-range::-moz-range-track {
+          height: 2px;
+          border-radius: 999px;
+          background: rgba(242,240,234,0.28);
+        }
+        .pmm-range::-moz-range-thumb {
+          width: 28px;
+          height: 20px;
+          border-radius: 999px;
+          border: 1px solid ${colors.selectedBorder};
+          background: ${colors.text};
+        }
+        .pmm-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(217,164,65,0.4); }
+        .pmm-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px rgba(217,164,65,0.4); }
+
+        .pmm-modal {
+          position: fixed;
+          inset: 0;
+          z-index: 40;
+          background: ${colors.bg};
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          animation: pmm-fade-in 180ms ease both;
+        }
+        .pmm-modal-inner {
+          max-width: 480px;
+          margin: 0 auto;
+          min-height: 100%;
+          box-sizing: border-box;
+          padding: calc(20px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-left))
+                   calc(40px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+          animation: pmm-rise 240ms cubic-bezier(0.22,0.61,0.36,1) both;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .pmm-modal, .pmm-modal-inner, .pmm-mood-label { animation: none; transition: none; }
         }
       `}</style>
 
@@ -288,60 +429,53 @@ export default function PodcastMoodMatcher() {
                 border: `1px solid ${colors.border}`,
                 borderRadius: '14px',
                 padding: '16px',
-                marginBottom: '28px',
+                marginBottom: '20px',
               }}
             >
               <Field label="Mood">
-                <PillRow options={MOOD_OPTIONS} isActive={(m) => m === mood} onSelect={setMood} />
-                <p style={{ fontSize: '12px', color: colors.textMuted, margin: '8px 0 0', lineHeight: 1.5 }}>
-                  {MOODS[mood]}
+                <MoodScrubber index={moodIndex} onChange={setMoodIndex} />
+                <p
+                  style={{
+                    fontSize: '12px',
+                    color: colors.textMuted,
+                    margin: '4px 0 0',
+                    lineHeight: 1.5,
+                    textAlign: 'center',
+                  }}
+                >
+                  {mood.description}
                 </p>
               </Field>
 
-              <Field label="Topics">
-                <PillRow options={visibleTopics} isActive={(t) => topics.includes(t)} onSelect={toggleTopic} />
+              <Field label="Topic">
+                <TopicCarousel options={topicOptions} selected={topic} onSelect={selectTopic} />
 
-                {!showMoreTopics && (
-                  <button
-                    onClick={() => setShowMoreTopics(true)}
-                    style={{
-                      marginTop: '8px',
-                      minHeight: '32px',
-                      padding: '4px 0',
-                      background: 'none',
-                      border: 'none',
-                      color: colors.textMuted,
-                      fontSize: '12.5px',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    More topics +
-                  </button>
-                )}
-
-                <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                <div style={{ position: 'relative', marginTop: '10px' }}>
                   <input
-                    placeholder="Enter a topic"
+                    placeholder="Enter a topic…"
                     value={topicInput}
                     onChange={(e) => setTopicInput(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !searching) {
+                      if (e.key === 'Enter') {
                         e.preventDefault();
-                        findEpisodes();
+                        commitTypedTopic();
                       }
                     }}
-                    style={{ ...inputStyle, flex: 1 }}
+                    aria-label="Enter a topic"
+                    style={{ ...inputStyle, paddingRight: '52px' }}
                   />
                   <button
                     className="pmm-btn"
-                    onClick={findEpisodes}
-                    aria-label="Find episodes"
-                    disabled={searching}
+                    onClick={commitTypedTopic}
+                    aria-label="Add this topic"
+                    disabled={!topicInput.trim()}
                     style={{
-                      width: '44px',
-                      height: '44px',
-                      flexShrink: 0,
+                      position: 'absolute',
+                      top: '50%',
+                      right: '6px',
+                      transform: 'translateY(-50%)',
+                      width: '34px',
+                      height: '34px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -349,10 +483,10 @@ export default function PodcastMoodMatcher() {
                       border: `1px solid ${colors.selectedBorder}`,
                       background: colors.selectedFill,
                       color: colors.text,
-                      fontSize: '17px',
+                      fontSize: '15px',
                       lineHeight: 1,
-                      cursor: searching ? 'default' : 'pointer',
-                      opacity: searching ? 0.5 : 1,
+                      cursor: topicInput.trim() ? 'pointer' : 'default',
+                      opacity: topicInput.trim() ? 1 : 0.4,
                     }}
                   >
                     ↑
@@ -363,56 +497,21 @@ export default function PodcastMoodMatcher() {
               <button
                 className="pmm-btn"
                 onClick={findEpisodes}
-                disabled={searching}
                 style={{
                   width: '100%',
                   minHeight: '48px',
                   padding: '13px',
-                  borderRadius: '8px',
+                  borderRadius: '999px',
                   border: 'none',
                   background: colors.accent,
                   color: colors.bg,
                   fontWeight: 600,
                   fontSize: '15px',
-                  cursor: searching ? 'default' : 'pointer',
-                  opacity: searching ? 0.7 : 1,
+                  cursor: 'pointer',
                 }}
               >
-                {searching ? `Searching the web… ${elapsed}s` : 'Find episodes'}
+                Find podcast
               </button>
-            </section>
-
-            {searching && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '28px' }}>
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    style={{
-                      background: colors.surfaceRaised,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: '8px',
-                      padding: '14px',
-                      height: '76px',
-                      animation: `pmm-pulse 1.4s ease-in-out ${i * 0.18}s infinite`,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            <section>
-              <SectionHeading>This session</SectionHeading>
-              {results.length === 0 && !searching ? (
-                <p style={{ color: colors.textMuted, fontSize: '13px', lineHeight: 1.5 }}>
-                  Nothing yet. Pick a mood and run a search.
-                </p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {results.map((ep) => (
-                    <EpisodeCard key={ep.id} episode={ep} onRate={rate} onDismiss={dismiss} />
-                  ))}
-                </div>
-              )}
             </section>
           </>
         ) : (
@@ -474,6 +573,345 @@ export default function PodcastMoodMatcher() {
               </div>
             )}
           </section>
+        )}
+      </div>
+
+      {phase === 'searching' && <SearchingModal search={lastSearch} elapsed={elapsed} onCancel={cancelSearch} />}
+
+      {phase === 'results' && (
+        <ResultsModal
+          episodes={results}
+          search={lastSearch}
+          onClose={() => setPhase('idle')}
+          onRate={rate}
+          onDismiss={dismiss}
+        />
+      )}
+    </div>
+  );
+}
+
+function MoodScrubber({ index, onChange }) {
+  return (
+    <div>
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'relative',
+          height: '54px',
+          borderRadius: '999px',
+          border: `1px solid ${colors.border}`,
+          background: colors.bg,
+          overflow: 'hidden',
+        }}
+      >
+        {/* The mask sits inside the frame so it fades the peeking moods, not the border. */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            maskImage: 'linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent)',
+            WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent)',
+          }}
+        >
+          {MOOD_SCALE.map((m, i) => (
+            <div
+              key={m.key}
+              className="pmm-mood-label"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                // 46% of the window shows a slice of each neighbour without crowding the centre.
+                transform: `translateX(${(i - index) * 46}%)`,
+                transition: 'transform 260ms cubic-bezier(0.22,0.61,0.36,1), opacity 200ms ease',
+                opacity: i === index ? 1 : 0.45,
+                fontFamily: "'Fraunces', serif",
+                fontWeight: 600,
+                fontSize: '21px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {m.label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ position: 'relative', marginTop: '6px' }}>
+        <div aria-hidden="true" style={{ position: 'absolute', inset: '0 15px', pointerEvents: 'none' }}>
+          {MOOD_SCALE.map((m, i) => (
+            <span
+              key={m.key}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: `${(i / (MOOD_SCALE.length - 1)) * 100}%`,
+                width: '2px',
+                height: i === index ? '14px' : '10px',
+                marginLeft: '-1px',
+                marginTop: i === index ? '-7px' : '-5px',
+                borderRadius: '999px',
+                background: i === index ? colors.text : 'rgba(242,240,234,0.4)',
+              }}
+            />
+          ))}
+        </div>
+
+        <input
+          className="pmm-range"
+          type="range"
+          min={0}
+          max={MOOD_SCALE.length - 1}
+          step={1}
+          value={index}
+          onChange={(e) => onChange(Number(e.target.value))}
+          aria-label="Mood"
+          aria-valuetext={MOOD_SCALE[index].label}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TopicCarousel({ options, selected, onSelect }) {
+  return (
+    <div className="pmm-carousel">
+      <div className="pmm-scroll" role="radiogroup" aria-label="Topic">
+        {options.map((option) => {
+          const active = option === selected;
+          return (
+            <button
+              key={option}
+              className="pmm-pill"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onSelect(option)}
+              style={{
+                flexShrink: 0,
+                scrollSnapAlign: 'start',
+                minHeight: '40px',
+                padding: '8px 16px',
+                borderRadius: '999px',
+                fontSize: '13.5px',
+                cursor: 'pointer',
+                border: `1px solid ${active ? colors.selectedBorder : colors.border}`,
+                background: active ? colors.selectedFill : 'transparent',
+                color: colors.text,
+                fontWeight: active ? 500 : 400,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function listenClause(topic, typed) {
+  const t = topic.trim();
+  const lower = t.toLowerCase();
+
+  if (/^something\s+about\s+/i.test(lower)) return t;
+  if (/^about\s+/i.test(lower)) return `something ${lower}`;
+
+  // Typed how-to / questions already read as the thing to listen to.
+  if (typed && /^(how|why|what|when|where|who|which|to)\b/i.test(lower)) return t;
+
+  return `something about ${t}`;
+}
+
+function SearchRecap({ search }) {
+  if (!search) return null;
+  const mood = search.mood.toLowerCase();
+  const topic = search.topic?.trim();
+  const clause = topic ? listenClause(topic, search.typed) : null;
+  const aboutPrefix = clause?.startsWith('something about ') ? 'something about ' : null;
+  const highlight = aboutPrefix ? clause.slice(aboutPrefix.length) : clause;
+
+  return (
+    <p style={{ fontFamily: "'Fraunces', serif", fontWeight: 500, fontSize: '22px', lineHeight: 1.4, margin: 0 }}>
+      I&apos;m feeling <span style={{ color: colors.accent }}>{mood}</span>
+      {clause ? (
+        <>
+          {' '}
+          and I want to listen to {aboutPrefix}
+          <span style={{ color: colors.accent }}>{highlight}</span>
+        </>
+      ) : null}
+      .
+    </p>
+  );
+}
+
+function SearchingModal({ search, elapsed, onCancel }) {
+  return (
+    <div className="pmm-modal" role="dialog" aria-modal="true" aria-label="Searching for episodes">
+      <div
+        className="pmm-modal-inner"
+        style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '28px' }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div
+            style={{
+              fontSize: '12px',
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: colors.textMuted,
+              marginBottom: '14px',
+            }}
+          >
+            Searching the web
+          </div>
+          <SearchRecap search={search} />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '18px' }}>
+          <div
+            aria-hidden="true"
+            style={{
+              width: '54px',
+              height: '54px',
+              borderRadius: '50%',
+              border: `2px solid ${colors.border}`,
+              borderTopColor: colors.accent,
+              animation: 'pmm-spin 900ms linear infinite',
+            }}
+          />
+          <div
+            aria-hidden="true"
+            style={{
+              width: '100%',
+              maxWidth: '220px',
+              height: '2px',
+              borderRadius: '999px',
+              background: colors.border,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: '40%',
+                height: '100%',
+                borderRadius: '999px',
+                background: colors.accent,
+                animation: 'pmm-sweep 1.6s ease-in-out infinite',
+              }}
+            />
+          </div>
+          <div role="status" style={{ fontSize: '13px', color: colors.textMuted }}>
+            Checking real episodes… {elapsed}s
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              style={{
+                background: colors.surfaceRaised,
+                border: `1px solid ${colors.border}`,
+                borderRadius: '8px',
+                height: '68px',
+                animation: `pmm-pulse 1.4s ease-in-out ${i * 0.18}s infinite`,
+              }}
+            />
+          ))}
+        </div>
+
+        <button
+          className="pmm-btn"
+          onClick={onCancel}
+          style={{
+            alignSelf: 'center',
+            minHeight: '44px',
+            padding: '10px 22px',
+            borderRadius: '999px',
+            border: `1px solid ${colors.border}`,
+            background: 'transparent',
+            color: colors.textMuted,
+            fontSize: '14px',
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResultsModal({ episodes, search, onClose, onRate, onDismiss }) {
+  const closeRef = useRef(null);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="pmm-modal" role="dialog" aria-modal="true" aria-label="Your matches">
+      <div className="pmm-modal-inner">
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '22px' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: '12px',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: colors.textMuted,
+                marginBottom: '10px',
+              }}
+            >
+              {episodes.length} {episodes.length === 1 ? 'match' : 'matches'}
+            </div>
+            <SearchRecap search={search} />
+          </div>
+          <button
+            ref={closeRef}
+            className="pmm-btn"
+            onClick={onClose}
+            aria-label="Close results"
+            style={{
+              flexShrink: 0,
+              width: '40px',
+              height: '40px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '999px',
+              border: `1px solid ${colors.border}`,
+              background: colors.surface,
+              color: colors.text,
+              fontSize: '16px',
+              lineHeight: 1,
+              cursor: 'pointer',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {episodes.length === 0 ? (
+          <p style={{ color: colors.textMuted, fontSize: '13px', lineHeight: 1.5 }}>
+            Nothing left here — close this and run another search.
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {episodes.map((ep) => (
+              <EpisodeCard key={ep.id} episode={ep} onRate={onRate} onDismiss={onDismiss} />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -628,7 +1066,7 @@ const inputStyle = {
   boxSizing: 'border-box',
   minHeight: '44px',
   padding: '11px 12px',
-  borderRadius: '8px',
+  borderRadius: '999px',
   border: `1px solid ${colors.border}`,
   background: colors.bg,
   color: colors.text,
