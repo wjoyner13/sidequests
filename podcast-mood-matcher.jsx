@@ -106,7 +106,7 @@ export default function PodcastMoodMatcher() {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const data = await api('/api/episodes?rating=not.null');
+      const data = await api('/api/episodes?history=1');
       setHistory(data.episodes);
       setError(null);
     } catch (e) {
@@ -205,24 +205,53 @@ export default function PodcastMoodMatcher() {
     searchRef.current?.abort();
   }
 
+  function patchEpisode(id, patch) {
+    setResults((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)));
+    setHistory((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)));
+  }
+
   async function rate(id, rating) {
-    const previous = results;
-    setResults((prev) => prev.map((ep) => (ep.id === id ? { ...ep, rating } : ep)));
+    const previousResults = results;
+    const previousHistory = history;
+    const ratedAt = new Date().toISOString();
+    patchEpisode(id, { rating, rated_at: ratedAt });
     try {
       await api('/api/rate', { method: 'POST', body: JSON.stringify({ id, rating }) });
     } catch (e) {
-      setResults(previous);
+      setResults(previousResults);
+      setHistory(previousHistory);
       setError(e.message);
     }
   }
 
   async function dismiss(id) {
-    const previous = results;
+    const previousResults = results;
+    const previousHistory = history;
     setResults((prev) => prev.filter((ep) => ep.id !== id));
+    setHistory((prev) => prev.filter((ep) => ep.id !== id));
     try {
       await api(`/api/episodes/${id}`, { method: 'DELETE' });
     } catch (e) {
-      setResults(previous);
+      setResults(previousResults);
+      setHistory(previousHistory);
+      setError(e.message);
+    }
+  }
+
+  async function markOpened(id) {
+    const openedAt = new Date().toISOString();
+    const fromResults = results.find((ep) => ep.id === id);
+    setResults((prev) => prev.map((ep) => (ep.id === id ? { ...ep, opened_at: openedAt } : ep)));
+    setHistory((prev) => {
+      if (prev.some((ep) => ep.id === id)) {
+        return prev.map((ep) => (ep.id === id ? { ...ep, opened_at: ep.opened_at ?? openedAt } : ep));
+      }
+      if (!fromResults) return prev;
+      return [{ ...fromResults, opened_at: openedAt }, ...prev];
+    });
+    try {
+      await api('/api/open', { method: 'POST', body: JSON.stringify({ id }) });
+    } catch (e) {
       setError(e.message);
     }
   }
@@ -232,9 +261,12 @@ export default function PodcastMoodMatcher() {
   const historyMoods = Array.from(new Set(history.map((ep) => ep.mood))).sort();
   const visibleHistory = [...(historyMood === 'all' ? history : history.filter((ep) => ep.mood === historyMood))].sort(
     (a, b) => {
-      const diff = RATING_ORDER[a.rating] - RATING_ORDER[b.rating];
+      const rank = (ep) => (ep.rating == null ? -1 : RATING_ORDER[ep.rating]);
+      const diff = rank(a) - rank(b);
       if (diff !== 0) return diff;
-      return new Date(b.rated_at) - new Date(a.rated_at);
+      return (
+        new Date(b.rated_at ?? b.opened_at ?? b.created_at) - new Date(a.rated_at ?? a.opened_at ?? a.created_at)
+      );
     }
   );
 
@@ -525,7 +557,7 @@ export default function PodcastMoodMatcher() {
           </>
         ) : (
           <section>
-            <SectionHeading>What's worked before</SectionHeading>
+            <SectionHeading>Opened and rated</SectionHeading>
 
             {historyMoods.length > 1 && (
               <div
@@ -541,44 +573,35 @@ export default function PodcastMoodMatcher() {
             )}
 
             {historyLoading ? (
-              <p style={{ color: colors.textMuted, fontSize: '13px' }}>Loading your ratings…</p>
+              <p style={{ color: colors.textMuted, fontSize: '13px' }}>Loading your history…</p>
             ) : visibleHistory.length === 0 ? (
               <p style={{ color: colors.textMuted, fontSize: '13px', lineHeight: 1.5 }}>
-                No ratings yet{historyMood !== 'all' ? ` for "${historyMood}"` : ''}. Rate something in Discover and
-                it'll show up here.
+                Nothing here yet{historyMood !== 'all' ? ` for "${historyMood}"` : ''}. Open a recommended episode
+                and it&apos;ll show up so you can rate it — or dismiss it if you didn&apos;t listen.
               </p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {visibleHistory.map((ep) => {
-                  const meta = RATING_META[ep.rating];
-                  return (
-                    <div
+                {visibleHistory.map((ep) =>
+                  ep.rating ? (
+                    <RatedHistoryCard
                       key={ep.id}
-                      style={{
-                        background: colors.surface,
-                        border: `1px solid ${colors.border}`,
-                        borderRadius: '14px',
-                        padding: '12px 14px',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: '10px',
-                      }}
-                    >
-                      <span style={{ fontSize: '15px', lineHeight: 1.3, flexShrink: 0 }}>{meta.emoji}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '13.5px', fontWeight: 500, lineHeight: 1.4 }}>
-                          <EpisodeTitle episode={ep} />
-                        </div>
-                        <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '2px' }}>
-                          {ep.podcast} · {ep.mood}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: '11px', color: meta.color, flexShrink: 0, marginTop: '3px' }}>
-                        {meta.label}
-                      </span>
-                    </div>
-                  );
-                })}
+                      episode={ep}
+                      onOpen={markOpened}
+                      onRate={rate}
+                      onDismiss={dismiss}
+                    />
+                  ) : (
+                    <EpisodeCard
+                      key={ep.id}
+                      episode={ep}
+                      showMood
+                      pending
+                      onOpen={markOpened}
+                      onRate={rate}
+                      onDismiss={dismiss}
+                    />
+                  )
+                )}
               </div>
             )}
           </section>
@@ -592,6 +615,7 @@ export default function PodcastMoodMatcher() {
           episodes={results}
           search={lastSearch}
           onClose={() => setPhase('idle')}
+          onOpen={markOpened}
           onRate={rate}
           onDismiss={dismiss}
         />
@@ -865,7 +889,7 @@ function SearchingModal({ search, elapsed, onCancel }) {
   );
 }
 
-function ResultsModal({ episodes, search, onClose, onRate, onDismiss }) {
+function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss }) {
   const closeRef = useRef(null);
 
   useEffect(() => {
@@ -927,7 +951,7 @@ function ResultsModal({ episodes, search, onClose, onRate, onDismiss }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {episodes.map((ep) => (
-              <EpisodeCard key={ep.id} episode={ep} onRate={onRate} onDismiss={onDismiss} />
+              <EpisodeCard key={ep.id} episode={ep} onOpen={onOpen} onRate={onRate} onDismiss={onDismiss} />
             ))}
           </div>
         )}
@@ -936,7 +960,7 @@ function ResultsModal({ episodes, search, onClose, onRate, onDismiss }) {
   );
 }
 
-function EpisodeCard({ episode, onRate, onDismiss }) {
+function EpisodeCard({ episode, onOpen, onRate, onDismiss, showMood, pending }) {
   return (
     <div
       style={{
@@ -949,9 +973,17 @@ function EpisodeCard({ episode, onRate, onDismiss }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '14px', fontWeight: 500, lineHeight: 1.4 }}>
-            <EpisodeTitle episode={episode} />
+            <EpisodeTitle episode={episode} onOpen={onOpen} />
           </div>
-          <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '3px' }}>{episode.podcast}</div>
+          <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '3px' }}>
+            {episode.podcast}
+            {showMood && episode.mood ? ` · ${episode.mood}` : ''}
+          </div>
+          {pending && (
+            <p style={{ fontSize: '12px', color: colors.textMuted, margin: '8px 0 0', lineHeight: 1.5 }}>
+              Rate it when you&apos;ve listened, or dismiss if you didn&apos;t.
+            </p>
+          )}
           {episode.summary && (
             <p style={{ fontSize: '12.5px', color: colors.textMuted, margin: '8px 0 0', lineHeight: 1.5 }}>
               {episode.summary}
@@ -960,7 +992,7 @@ function EpisodeCard({ episode, onRate, onDismiss }) {
         </div>
         <button
           onClick={() => onDismiss(episode.id)}
-          aria-label="Remove episode"
+          aria-label={pending ? "Didn't listen — remove from history" : 'Remove episode'}
           style={{
             background: 'none',
             border: 'none',
@@ -1016,18 +1048,105 @@ function EpisodeCard({ episode, onRate, onDismiss }) {
   );
 }
 
-function EpisodeTitle({ episode }) {
+function EpisodeTitle({ episode, onOpen }) {
   if (!episode.link) return <span className="pmm-title">{episode.title}</span>;
+
+  function handleOpen() {
+    onOpen?.(episode.id);
+  }
+
   return (
     <a
       className="pmm-title"
       href={episode.link}
       target="_blank"
       rel="noreferrer"
+      onClick={handleOpen}
+      onAuxClick={(e) => {
+        if (e.button === 1) handleOpen();
+      }}
       style={{ color: colors.text, textDecoration: 'none', borderBottom: `1px solid ${colors.border}` }}
     >
       {episode.title}
     </a>
+  );
+}
+
+function RatedHistoryCard({ episode, onOpen, onRate, onDismiss }) {
+  const meta = RATING_META[episode.rating];
+  return (
+    <div
+      style={{
+        background: colors.surface,
+        border: `1px solid ${colors.border}`,
+        borderRadius: '14px',
+        padding: '12px 14px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+        <span style={{ fontSize: '15px', lineHeight: 1.3, flexShrink: 0 }}>{meta.emoji}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '13.5px', fontWeight: 500, lineHeight: 1.4 }}>
+            <EpisodeTitle episode={episode} onOpen={onOpen} />
+          </div>
+          <div style={{ fontSize: '12px', color: colors.textMuted, marginTop: '2px' }}>
+            {episode.podcast} · {episode.mood}
+          </div>
+        </div>
+        <span style={{ fontSize: '11px', color: meta.color, flexShrink: 0, marginTop: '3px' }}>{meta.label}</span>
+        <button
+          onClick={() => onDismiss(episode.id)}
+          aria-label="Remove from history"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: colors.textMuted,
+            cursor: 'pointer',
+            flexShrink: 0,
+            fontSize: '15px',
+            lineHeight: 1,
+            width: '44px',
+            height: '44px',
+            margin: '-12px -12px 0 0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      <div className="pmm-rate">
+        {Object.entries(RATING_META).map(([key, m]) => {
+          const active = episode.rating === key;
+          return (
+            <button
+              key={key}
+              className="pmm-btn"
+              onClick={() => onRate(episode.id, key)}
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                minHeight: '44px',
+                padding: '8px 6px',
+                borderRadius: '6px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                border: `1px solid ${active ? m.color : colors.border}`,
+                background: active ? colors.selectedFill : 'transparent',
+                color: active ? m.color : colors.text,
+              }}
+            >
+              <span style={{ fontSize: '13px' }}>{m.emoji}</span>
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

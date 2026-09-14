@@ -8,6 +8,7 @@ import {
   episodeRows,
   insertEpisodes,
   listEpisodes,
+  openEpisode,
   rateEpisode,
   storeStatus,
 } from '../lib/store.js';
@@ -71,6 +72,18 @@ app.post('/api/rate', async (req, res) => {
   }
 });
 
+app.post('/api/open', async (req, res) => {
+  const { id } = req.body ?? {};
+  if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'id is required' });
+
+  try {
+    res.json({ episode: await openEpisode(id) });
+  } catch (err) {
+    console.error('POST /api/open', err);
+    res.status(500).json({ error: err.message ?? 'Open failed' });
+  }
+});
+
 app.delete('/api/episodes/:id', async (req, res) => {
   try {
     await deleteEpisode(req.params.id);
@@ -81,11 +94,13 @@ app.delete('/api/episodes/:id', async (req, res) => {
   }
 });
 
+// history=1 returns rated episodes plus anything the listener opened.
 // rating=not.null returns only rated episodes; rating=null only unrated.
 app.get('/api/episodes', async (req, res) => {
-  const { rating, mood } = req.query;
+  const { rating, mood, history } = req.query;
   try {
     const episodes = await listEpisodes({
+      history: history === '1' || history === 'true',
       rating: typeof rating === 'string' ? rating : undefined,
       mood: typeof mood === 'string' && mood && mood !== 'all' ? mood : undefined,
     });

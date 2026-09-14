@@ -14,8 +14,10 @@ export default async (req, context) => {
 
     const { searchParams } = new URL(req.url);
     const mood = searchParams.get('mood');
+    const history = searchParams.get('history');
     return json({
       episodes: await listEpisodes({
+        history: history === '1' || history === 'true',
         rating: searchParams.get('rating') ?? undefined,
         mood: mood && mood !== 'all' ? mood : undefined,
       }),
