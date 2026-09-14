@@ -241,13 +241,15 @@ export default function PodcastMoodMatcher() {
   async function markOpened(id) {
     const openedAt = new Date().toISOString();
     const fromResults = results.find((ep) => ep.id === id);
-    setResults((prev) => prev.map((ep) => (ep.id === id ? { ...ep, opened_at: openedAt } : ep)));
+    setResults((prev) =>
+      prev.map((ep) => (ep.id === id ? { ...ep, rated_at: ep.rated_at ?? openedAt } : ep))
+    );
     setHistory((prev) => {
       if (prev.some((ep) => ep.id === id)) {
-        return prev.map((ep) => (ep.id === id ? { ...ep, opened_at: ep.opened_at ?? openedAt } : ep));
+        return prev.map((ep) => (ep.id === id ? { ...ep, rated_at: ep.rated_at ?? openedAt } : ep));
       }
       if (!fromResults) return prev;
-      return [{ ...fromResults, opened_at: openedAt }, ...prev];
+      return [{ ...fromResults, rated_at: fromResults.rated_at ?? openedAt }, ...prev];
     });
     try {
       await api('/api/open', { method: 'POST', body: JSON.stringify({ id }) });
@@ -264,9 +266,7 @@ export default function PodcastMoodMatcher() {
       const rank = (ep) => (ep.rating == null ? -1 : RATING_ORDER[ep.rating]);
       const diff = rank(a) - rank(b);
       if (diff !== 0) return diff;
-      return (
-        new Date(b.rated_at ?? b.opened_at ?? b.created_at) - new Date(a.rated_at ?? a.opened_at ?? a.created_at)
-      );
+      return new Date(b.rated_at ?? b.created_at) - new Date(a.rated_at ?? a.created_at);
     }
   );
 

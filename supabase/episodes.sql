@@ -11,13 +11,10 @@ create table if not exists public.episodes (
   query text,
   rating text check (rating in ('positive', 'neutral', 'negative')),
   created_at timestamptz not null default now(),
-  rated_at timestamptz,
-  -- Set when the listener opens the episode link so it can sit in History
-  -- (with rating controls) even before they rate it.
-  opened_at timestamptz
+  -- Also set when the listener opens an episode link (rating still null) so
+  -- it can sit in History before they rate it.
+  rated_at timestamptz
 );
-
-alter table public.episodes add column if not exists opened_at timestamptz;
 
 create index if not exists episodes_rating_idx on public.episodes (rating);
 create index if not exists episodes_mood_idx on public.episodes (mood);
