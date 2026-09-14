@@ -8,6 +8,7 @@ export default defineConfig({
     strictPort: true,
     // Reachable from a phone on the same network for real-device testing.
     host: true,
+    allowedHosts: true,
     proxy: {
       // Web searches can run well past the default proxy timeout.
       '/api': {

@@ -51,6 +51,22 @@ const colors = {
 // only leaves the user staring at a spinner.
 const SEARCH_TIMEOUT_MS = 70_000;
 
+const BOOKMARKS_KEY = 'moodflo.bookmarks';
+
+function readBookmarks() {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeBookmarks(episodes) {
+  localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(episodes));
+}
+
 async function api(path, options = {}) {
   const { timeoutMs = 20_000, signal, ...init } = options;
   const controller = new AbortController();
@@ -100,6 +116,7 @@ export default function PodcastMoodMatcher() {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyMood, setHistoryMood] = useState('all');
+  const [bookmarks, setBookmarks] = useState(readBookmarks);
 
   const mood = MOOD_SCALE[moodIndex];
 
@@ -119,6 +136,10 @@ export default function PodcastMoodMatcher() {
   useEffect(() => {
     if (view === 'history') loadHistory();
   }, [view, loadHistory]);
+
+  useEffect(() => {
+    writeBookmarks(bookmarks);
+  }, [bookmarks]);
 
   // Surfaces a misconfigured deploy (missing keys, missing table) up front
   // rather than waiting for the first search to fail.
@@ -208,6 +229,7 @@ export default function PodcastMoodMatcher() {
   function patchEpisode(id, patch) {
     setResults((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)));
     setHistory((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)));
+    setBookmarks((prev) => prev.map((ep) => (ep.id === id ? { ...ep, ...patch } : ep)));
   }
 
   async function rate(id, rating) {
@@ -256,6 +278,15 @@ export default function PodcastMoodMatcher() {
     } catch (e) {
       setError(e.message);
     }
+  }
+
+  function toggleBookmark(episode) {
+    setBookmarks((prev) => {
+      if (prev.some((ep) => ep.id === episode.id)) {
+        return prev.filter((ep) => ep.id !== episode.id);
+      }
+      return [{ ...episode, bookmarked_at: new Date().toISOString() }, ...prev];
+    });
   }
 
   const topicOptions = Array.from(new Set([...customTopics, ...TOPICS]));
@@ -327,7 +358,47 @@ export default function PodcastMoodMatcher() {
           max-width: 480px;
           margin: 0 auto;
           padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-left))
-                   calc(48px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+                   calc(108px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+        }
+        .pmm-nav-island {
+          position: fixed;
+          z-index: 50;
+          left: 50%;
+          bottom: max(12px, env(safe-area-inset-bottom));
+          transform: translateX(-50%);
+          width: min(420px, calc(100% - 24px));
+          display: flex;
+          gap: 4px;
+          padding: 6px;
+          box-sizing: border-box;
+          border-radius: 28px;
+          background: rgba(53, 63, 58, 0.92);
+          border: 1px solid ${colors.border};
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+        }
+        .pmm-nav-tab {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          min-height: 56px;
+          padding: 8px 4px 6px;
+          border: none;
+          border-radius: 22px;
+          background: transparent;
+          color: ${colors.textMuted};
+          cursor: pointer;
+        }
+        .pmm-nav-tab[aria-current="page"] {
+          background: ${colors.selectedFill};
+          color: ${colors.text};
+        }
+        .pmm-nav-tab svg {
+          display: block;
         }
         /* Episode titles are long; never let one push the card sideways. */
         .pmm-title { overflow-wrap: anywhere; }
@@ -412,7 +483,7 @@ export default function PodcastMoodMatcher() {
           min-height: 100%;
           box-sizing: border-box;
           padding: calc(20px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-left))
-                   calc(40px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+                   calc(108px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
           animation: pmm-rise 240ms cubic-bezier(0.22,0.61,0.36,1) both;
         }
         @media (prefers-reduced-motion: reduce) {
@@ -436,33 +507,6 @@ export default function PodcastMoodMatcher() {
           <p style={{ color: colors.textMuted, fontSize: '14px', marginTop: '6px', lineHeight: 1.5 }}>
             Say what you're in the mood for, get real episodes, rate them so the good ones stick.
           </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '24px' }}>
-          {[
-            ['discover', 'Discover'],
-            ['history', 'History'],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              className="pmm-pill"
-              onClick={() => setView(key)}
-              style={{
-                flex: 1,
-                minHeight: '44px',
-                padding: '7px 16px',
-                borderRadius: '999px',
-                fontSize: '14px',
-                cursor: 'pointer',
-                fontWeight: 500,
-                border: `1px solid ${view === key ? colors.selectedBorder : colors.border}`,
-                background: view === key ? colors.selectedFill : 'transparent',
-                color: colors.text,
-              }}
-            >
-              {label}
-            </button>
-          ))}
         </div>
 
         {error && (
@@ -555,6 +599,29 @@ export default function PodcastMoodMatcher() {
               </Field>
             </section>
           </>
+        ) : view === 'bookmarks' ? (
+          <section>
+            <SectionHeading>Bookmarks</SectionHeading>
+            {bookmarks.length === 0 ? (
+              <p style={{ color: colors.textMuted, fontSize: '13px', lineHeight: 1.5 }}>
+                Nothing saved yet. Bookmark a recommended episode and it&apos;ll show up here.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {bookmarks.map((ep) => (
+                  <EpisodeCard
+                    key={ep.id}
+                    episode={ep}
+                    showMood
+                    bookmarked
+                    onOpen={markOpened}
+                    onRate={rate}
+                    onBookmark={toggleBookmark}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         ) : (
           <section>
             <SectionHeading>Opened and rated</SectionHeading>
@@ -608,6 +675,16 @@ export default function PodcastMoodMatcher() {
         )}
       </div>
 
+      {phase !== 'searching' && (
+        <BottomNav
+          view={view}
+          onChange={(next) => {
+            setPhase('idle');
+            setView(next);
+          }}
+        />
+      )}
+
       {phase === 'searching' && <SearchingModal search={lastSearch} elapsed={elapsed} onCancel={cancelSearch} />}
 
       {phase === 'results' && (
@@ -618,6 +695,8 @@ export default function PodcastMoodMatcher() {
           onOpen={markOpened}
           onRate={rate}
           onDismiss={dismiss}
+          onBookmark={toggleBookmark}
+          bookmarkedIds={new Set(bookmarks.map((ep) => ep.id))}
         />
       )}
     </div>
@@ -889,7 +968,7 @@ function SearchingModal({ search, elapsed, onCancel }) {
   );
 }
 
-function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss }) {
+function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss, onBookmark, bookmarkedIds }) {
   const closeRef = useRef(null);
 
   useEffect(() => {
@@ -951,7 +1030,15 @@ function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss }) 
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {episodes.map((ep) => (
-              <EpisodeCard key={ep.id} episode={ep} onOpen={onOpen} onRate={onRate} onDismiss={onDismiss} />
+              <EpisodeCard
+                key={ep.id}
+                episode={ep}
+                bookmarked={bookmarkedIds?.has(ep.id)}
+                onOpen={onOpen}
+                onRate={onRate}
+                onDismiss={onDismiss}
+                onBookmark={onBookmark}
+              />
             ))}
           </div>
         )}
@@ -960,7 +1047,7 @@ function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss }) 
   );
 }
 
-function EpisodeCard({ episode, onOpen, onRate, onDismiss, showMood, pending }) {
+function EpisodeCard({ episode, onOpen, onRate, onDismiss, onBookmark, showMood, pending, bookmarked }) {
   return (
     <div
       style={{
@@ -968,9 +1055,33 @@ function EpisodeCard({ episode, onOpen, onRate, onDismiss, showMood, pending }) 
         border: `1px solid ${colors.border}`,
         borderRadius: '8px',
         padding: '14px',
+        position: 'relative',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+        {onBookmark && (
+          <button
+            className="pmm-btn"
+            onClick={() => onBookmark(episode)}
+            aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark episode'}
+            aria-pressed={bookmarked}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: bookmarked ? colors.accent : colors.textMuted,
+              cursor: 'pointer',
+              flexShrink: 0,
+              width: '44px',
+              height: '44px',
+              margin: '-12px 0 0 -12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <BookmarkIcon filled={bookmarked} />
+          </button>
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '14px', fontWeight: 500, lineHeight: 1.4 }}>
             <EpisodeTitle episode={episode} onOpen={onOpen} />
@@ -990,6 +1101,7 @@ function EpisodeCard({ episode, onOpen, onRate, onDismiss, showMood, pending }) 
             </p>
           )}
         </div>
+        {onDismiss && (
         <button
           onClick={() => onDismiss(episode.id)}
           aria-label={pending ? "Didn't listen — remove from history" : 'Remove episode'}
@@ -1012,6 +1124,7 @@ function EpisodeCard({ episode, onOpen, onRate, onDismiss, showMood, pending }) 
         >
           ✕
         </button>
+        )}
       </div>
 
       <div className="pmm-rate">
@@ -1147,6 +1260,86 @@ function RatedHistoryCard({ episode, onOpen, onRate, onDismiss }) {
         })}
       </div>
     </div>
+  );
+}
+
+function BottomNav({ view, onChange }) {
+  return (
+    <nav className="pmm-nav-island" aria-label="Primary">
+      {[
+        ['discover', 'Discover', DiscoverIcon],
+        ['history', 'History', HistoryIcon],
+        ['bookmarks', 'Bookmarks', BookmarkIcon],
+      ].map(([key, label, Icon]) => {
+        const current = view === key;
+        return (
+          <button
+            key={key}
+            className="pmm-nav-tab"
+            type="button"
+            onClick={() => onChange(key)}
+            aria-current={current ? 'page' : undefined}
+          >
+            <Icon filled={current} />
+            <span style={{ fontSize: '11px', fontWeight: current ? 600 : 500, lineHeight: 1.2 }}>{label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function DiscoverIcon({ filled }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.25" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M14.7 9.3 10.2 10.8 8.7 15.3 13.2 13.8 14.7 9.3Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function HistoryIcon({ filled }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="13" r="7.25" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M12 9.5V13l2.4 1.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.2 5.2 5 7.5M5 7.5h3.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={filled ? 1 : 0.85}
+      />
+    </svg>
+  );
+}
+
+function BookmarkIcon({ filled }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M7 4.75h10A1.25 1.25 0 0 1 18.25 6v14.1l-6.25-3.4-6.25 3.4V6A1.25 1.25 0 0 1 7 4.75Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
