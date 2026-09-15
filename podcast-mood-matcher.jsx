@@ -300,6 +300,7 @@ export default function PodcastMoodMatcher() {
       return new Date(b.rated_at ?? b.created_at) - new Date(a.rated_at ?? a.created_at);
     }
   );
+  const bookmarkedIds = new Set(bookmarks.map((ep) => ep.id));
 
   return (
     <div
@@ -653,9 +654,11 @@ export default function PodcastMoodMatcher() {
                     <RatedHistoryCard
                       key={ep.id}
                       episode={ep}
+                      bookmarked={bookmarkedIds.has(ep.id)}
                       onOpen={markOpened}
                       onRate={rate}
                       onDismiss={dismiss}
+                      onBookmark={toggleBookmark}
                     />
                   ) : (
                     <EpisodeCard
@@ -663,9 +666,11 @@ export default function PodcastMoodMatcher() {
                       episode={ep}
                       showMood
                       pending
+                      bookmarked={bookmarkedIds.has(ep.id)}
                       onOpen={markOpened}
                       onRate={rate}
                       onDismiss={dismiss}
+                      onBookmark={toggleBookmark}
                     />
                   )
                 )}
@@ -696,7 +701,7 @@ export default function PodcastMoodMatcher() {
           onRate={rate}
           onDismiss={dismiss}
           onBookmark={toggleBookmark}
-          bookmarkedIds={new Set(bookmarks.map((ep) => ep.id))}
+          bookmarkedIds={bookmarkedIds}
         />
       )}
     </div>
@@ -1185,7 +1190,7 @@ function EpisodeTitle({ episode, onOpen }) {
   );
 }
 
-function RatedHistoryCard({ episode, onOpen, onRate, onDismiss }) {
+function RatedHistoryCard({ episode, onOpen, onRate, onDismiss, onBookmark, bookmarked }) {
   const meta = RATING_META[episode.rating];
   return (
     <div
@@ -1196,8 +1201,31 @@ function RatedHistoryCard({ episode, onOpen, onRate, onDismiss }) {
         padding: '12px 14px',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-        <span style={{ fontSize: '15px', lineHeight: 1.3, flexShrink: 0 }}>{meta.emoji}</span>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+        {onBookmark && (
+          <button
+            className="pmm-btn"
+            onClick={() => onBookmark(episode)}
+            aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark episode'}
+            aria-pressed={bookmarked}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: bookmarked ? colors.accent : colors.textMuted,
+              cursor: 'pointer',
+              flexShrink: 0,
+              width: '44px',
+              height: '44px',
+              margin: '-12px 0 0 -12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <BookmarkIcon filled={bookmarked} />
+          </button>
+        )}
+        <span style={{ fontSize: '15px', lineHeight: 1.3, flexShrink: 0, marginTop: '2px' }}>{meta.emoji}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '13.5px', fontWeight: 500, lineHeight: 1.4 }}>
             <EpisodeTitle episode={episode} onOpen={onOpen} />
