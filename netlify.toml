@@ -8,9 +8,6 @@
 
 [functions]
   node_bundler = "esbuild"
-  # Slow mood+topic searches used to sit silent until Anthropic finished, and
-  # the edge proxy then returned an HTML 404/504 inactivity page.
-  timeout = 60
 
 # Routes live on each function via `config.path`. No catch-all rewrite —
 # a /* → index.html rule can swallow /api/* on some deploys, which is
