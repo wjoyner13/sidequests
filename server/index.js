@@ -36,6 +36,19 @@ app.post('/api/recommend', async (req, res) => {
   const { mood, topics, query } = normalizeRequest(req.body);
   if (!mood) return res.status(400).json({ error: 'Pick a mood first.' });
 
+  res.status(200);
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.write(' ');
+  const heartbeat = setInterval(() => {
+    try {
+      if (!res.writableEnded) res.write(' ');
+    } catch {
+      /* client disconnected */
+    }
+  }, 4000);
+
   try {
     // Cancel the upstream search if the browser gives up first.
     const episodes = await searchEpisodes({ mood, topics, query }, (abort) => {
@@ -44,16 +57,21 @@ app.post('/api/recommend', async (req, res) => {
       });
     });
     if (!episodes.length) {
-      return res.status(502).json({ error: 'The search came back empty. Try a different topic or query.' });
+      return res.end(JSON.stringify({ error: 'The search came back empty. Try a different topic or query.' }));
     }
-    res.json({ episodes: await insertEpisodes(episodeRows({ episodes, mood, topics, query })) });
+    res.end(JSON.stringify({ episodes: await insertEpisodes(episodeRows({ episodes, mood, topics, query })) }));
   } catch (err) {
     console.error('POST /api/recommend', err);
-    res.status(isTimeout(err) ? 504 : 500).json({
-      error: isTimeout(err)
-        ? 'The web search took too long. Try again with a narrower topic.'
-        : err.message ?? 'Recommendation failed',
-    });
+    if (res.writableEnded) return;
+    res.end(
+      JSON.stringify({
+        error: isTimeout(err)
+          ? 'The web search took too long. Try again with a narrower topic.'
+          : err.message ?? 'Recommendation failed',
+      })
+    );
+  } finally {
+    clearInterval(heartbeat);
   }
 });
 

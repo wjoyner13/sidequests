@@ -80,11 +80,22 @@ async function api(path, options = {}) {
       signal: controller.signal,
       ...init,
     });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error ?? `Request failed (${res.status})`);
+    if (res.status === 204) return null;
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error(
+        !res.ok
+          ? 'The search took too long or did not complete. Try again.'
+          : 'The server sent a broken response. Try again.'
+      );
     }
-    return res.status === 204 ? null : res.json();
+    if (!res.ok || data?.error) {
+      throw new Error(data?.error ?? `Request failed (${res.status})`);
+    }
+    return data;
   } catch (e) {
     if (e.name === 'AbortError') {
       if (signal?.aborted) throw Object.assign(new Error('Search cancelled'), { cancelled: true });
