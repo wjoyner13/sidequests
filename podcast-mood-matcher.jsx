@@ -128,6 +128,7 @@ export default function PodcastMoodMatcher() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyMood, setHistoryMood] = useState('all');
   const [bookmarks, setBookmarks] = useState(readBookmarks);
+  const [missModal, setMissModal] = useState(null);
 
   const mood = MOOD_SCALE[moodIndex];
 
@@ -168,13 +169,13 @@ export default function PodcastMoodMatcher() {
 
   // The page behind a full-screen modal must not scroll under it.
   useEffect(() => {
-    if (phase === 'idle') return;
+    if (phase === 'idle' && !missModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [phase]);
+  }, [phase, missModal]);
 
   function selectTopic(next) {
     setTopic((prev) => {
@@ -247,12 +248,43 @@ export default function PodcastMoodMatcher() {
     const previousResults = results;
     const previousHistory = history;
     const ratedAt = new Date().toISOString();
+    const target =
+      results.find((ep) => ep.id === id) ??
+      history.find((ep) => ep.id === id) ??
+      bookmarks.find((ep) => ep.id === id);
+
     patchEpisode(id, { rating, rated_at: ratedAt });
+    if (rating === 'negative') {
+      // Pull the card out of its list — the miss modal takes over from here.
+      // Bookmarks are left alone: a rating shouldn't silently un-bookmark something.
+      setResults((prev) => prev.filter((ep) => ep.id !== id));
+      setHistory((prev) => prev.filter((ep) => ep.id !== id));
+      if (target) setMissModal({ ...target, rating, rated_at: ratedAt });
+    }
+
     try {
       await api('/api/rate', { method: 'POST', body: JSON.stringify({ id, rating }) });
     } catch (e) {
       setResults(previousResults);
       setHistory(previousHistory);
+      setError(e.message);
+      setMissModal((m) => (m?.id === id ? null : m));
+    }
+  }
+
+  function closeMissModal() {
+    setMissModal(null);
+  }
+
+  async function submitMissFeedback(text) {
+    if (!missModal) return;
+    const { id } = missModal;
+    const feedback = text.trim();
+    setMissModal(null);
+    if (!feedback) return;
+    try {
+      await api('/api/rate', { method: 'POST', body: JSON.stringify({ id, rating: 'negative', feedback }) });
+    } catch (e) {
       setError(e.message);
     }
   }
@@ -691,7 +723,7 @@ export default function PodcastMoodMatcher() {
         )}
       </div>
 
-      {phase !== 'searching' && (
+      {phase !== 'searching' && !missModal && (
         <BottomNav
           view={view}
           onChange={(next) => {
@@ -714,6 +746,10 @@ export default function PodcastMoodMatcher() {
           onBookmark={toggleBookmark}
           bookmarkedIds={bookmarkedIds}
         />
+      )}
+
+      {missModal && (
+        <MissFeedbackModal episode={missModal} onClose={closeMissModal} onSubmit={submitMissFeedback} />
       )}
     </div>
   );
@@ -1058,6 +1094,127 @@ function ResultsModal({ episodes, search, onClose, onOpen, onRate, onDismiss, on
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function MissFeedbackModal({ episode, onClose, onSubmit }) {
+  const [text, setText] = useState('');
+  const textRef = useRef(null);
+
+  useEffect(() => {
+    textRef.current?.focus();
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const trimmed = text.trim();
+
+  return (
+    <div className="pmm-modal" role="dialog" aria-modal="true" aria-label="What was off?">
+      <div className="pmm-modal-inner" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: '12px',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: colors.textMuted,
+                marginBottom: '10px',
+              }}
+            >
+              👎 Missed
+            </div>
+            <p style={{ fontFamily: "'Fraunces', serif", fontWeight: 500, fontSize: '20px', lineHeight: 1.4, margin: 0 }}>
+              What was off about <span style={{ color: colors.accent }}>{episode.title}</span>?
+            </p>
+          </div>
+          <button
+            className="pmm-btn"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              flexShrink: 0,
+              width: '40px',
+              height: '40px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '999px',
+              border: `1px solid ${colors.border}`,
+              background: colors.surface,
+              color: colors.text,
+              fontSize: '16px',
+              lineHeight: 1,
+              cursor: 'pointer',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <textarea
+          ref={textRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Wrong vibe, too long, already heard it… (optional)"
+          rows={4}
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '12px',
+            borderRadius: '12px',
+            border: `1px solid ${colors.border}`,
+            background: colors.surface,
+            color: colors.text,
+            fontSize: '15px',
+            fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+            outline: 'none',
+            resize: 'vertical',
+          }}
+        />
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            className="pmm-btn"
+            onClick={onClose}
+            style={{
+              flex: 1,
+              minHeight: '44px',
+              borderRadius: '999px',
+              border: `1px solid ${colors.border}`,
+              background: 'transparent',
+              color: colors.textMuted,
+              fontSize: '14px',
+              cursor: 'pointer',
+            }}
+          >
+            Skip
+          </button>
+          <button
+            className="pmm-btn"
+            onClick={() => onSubmit(text)}
+            disabled={!trimmed}
+            style={{
+              flex: 1,
+              minHeight: '44px',
+              borderRadius: '999px',
+              border: 'none',
+              background: trimmed ? colors.accent : colors.selectedFill,
+              color: trimmed ? colors.bg : colors.textMuted,
+              fontSize: '14px',
+              fontWeight: 500,
+              cursor: trimmed ? 'pointer' : 'default',
+            }}
+          >
+            Save
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -76,14 +76,17 @@ app.post('/api/recommend', async (req, res) => {
 });
 
 app.post('/api/rate', async (req, res) => {
-  const { id, rating } = req.body ?? {};
+  const { id, rating, feedback } = req.body ?? {};
   if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'id is required' });
   if (!RATINGS.includes(rating)) {
     return res.status(400).json({ error: `rating must be one of ${RATINGS.join(', ')}` });
   }
+  if (feedback !== undefined && typeof feedback !== 'string') {
+    return res.status(400).json({ error: 'feedback must be a string' });
+  }
 
   try {
-    res.json({ episode: await rateEpisode(id, rating) });
+    res.json({ episode: await rateEpisode(id, rating, feedback) });
   } catch (err) {
     console.error('POST /api/rate', err);
     res.status(500).json({ error: err.message ?? 'Rating failed' });

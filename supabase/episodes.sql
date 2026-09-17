@@ -16,6 +16,9 @@ create table if not exists public.episodes (
   rated_at timestamptz
 );
 
+-- Free-text reason for a "negative" rating, collected from the miss-feedback modal.
+alter table public.episodes add column if not exists feedback text;
+
 create index if not exists episodes_rating_idx on public.episodes (rating);
 create index if not exists episodes_mood_idx on public.episodes (mood);
 
