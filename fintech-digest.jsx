@@ -23,9 +23,10 @@ const colors = {
   danger: '#E39B87',
 };
 
-// Netlify kills a synchronous function at 60s; the digest call itself times
-// out server-side a little earlier than that (see lib/digest.js).
-const PULL_TIMEOUT_MS = 75_000;
+// Give the browser more patience than the server-side cap (lib/digest.js)
+// so a slow-but-legitimate multi-source search isn't killed client-side
+// before the server's own timeout has a chance to respond.
+const PULL_TIMEOUT_MS = 120_000;
 
 async function api(path, options = {}) {
   const { timeoutMs = 20_000, signal, ...init } = options;
