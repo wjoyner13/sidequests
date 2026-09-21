@@ -3,6 +3,15 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      // Multi-page build: each side quest gets its own static HTML entry.
+      input: {
+        main: 'index.html',
+        digest: 'digest.html',
+      },
+    },
+  },
   server: {
     port: 5174,
     strictPort: true,

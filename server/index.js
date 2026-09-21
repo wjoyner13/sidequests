@@ -12,6 +12,8 @@ import {
   rateEpisode,
   storeStatus,
 } from '../lib/store.js';
+import { generateDigest, isTimeout as isDigestTimeout } from '../lib/digest.js';
+import { deleteDigest, digestStoreStatus, insertDigest, listDigests } from '../lib/digestStore.js';
 
 const missing = ['ANTHROPIC_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'].filter(
   (k) => !process.env[k]
@@ -129,6 +131,67 @@ app.get('/api/episodes', async (req, res) => {
   } catch (err) {
     console.error('GET /api/episodes', err);
     res.status(500).json({ error: err.message ?? 'Fetch failed' });
+  }
+});
+
+app.get('/api/digest-status', async (_req, res) => {
+  const status = await digestStoreStatus();
+  res.status(status.ok ? 200 : 500).json(status);
+});
+
+app.post('/api/digest', async (_req, res) => {
+  res.status(200);
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.write(' ');
+  const heartbeat = setInterval(() => {
+    try {
+      if (!res.writableEnded) res.write(' ');
+    } catch {
+      /* client disconnected */
+    }
+  }, 4000);
+
+  try {
+    // Cancel the upstream search if the browser gives up first.
+    const digest = await generateDigest((abort) => {
+      res.on('close', () => {
+        if (!res.writableEnded) abort();
+      });
+    });
+    res.end(JSON.stringify({ digest: await insertDigest(digest) }));
+  } catch (err) {
+    console.error('POST /api/digest', err);
+    if (res.writableEnded) return;
+    res.end(
+      JSON.stringify({
+        error: isDigestTimeout(err)
+          ? 'The web search took too long. Try pulling again.'
+          : err.message ?? 'Digest failed',
+      })
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
+});
+
+app.get('/api/digests', async (_req, res) => {
+  try {
+    res.json({ digests: await listDigests() });
+  } catch (err) {
+    console.error('GET /api/digests', err);
+    res.status(500).json({ error: err.message ?? 'Fetch failed' });
+  }
+});
+
+app.delete('/api/digests/:id', async (req, res) => {
+  try {
+    await deleteDigest(req.params.id);
+    res.status(204).end();
+  } catch (err) {
+    console.error('DELETE /api/digests/:id', err);
+    res.status(500).json({ error: err.message ?? 'Delete failed' });
   }
 });
 
