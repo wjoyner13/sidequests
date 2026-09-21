@@ -2,14 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Mirrors lib/digest.js SOURCES — display copy only, kept separate so this
 // file never imports server-only code (Anthropic SDK, process.env) into the browser bundle.
-const SOURCE_NAMES = [
-  'Finextra',
-  'Fintech Business Weekly',
-  'Fintech Brainfood',
-  'Fintech Takes',
-  'Sifted',
-  'Axios Pro Fintech Deals',
-];
+const SOURCE_NAMES = ['Finextra', 'Fintech Business Weekly', 'Fintech Brainfood', 'Fintech Takes'];
 
 const colors = {
   bg: '#2C3531',
