@@ -605,7 +605,7 @@ function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate,
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
         <h1 style={styles.title}>Riff Master</h1>
-        <p style={styles.subtitle}>Repeat a {ROUNDS}-note riff — solo or racing friends</p>
+        <p style={styles.tagline}>REMEMBER RIFFS AND CHALLENGE FRIENDS</p>
       </header>
 
       <div style={styles.card}>
@@ -923,6 +923,7 @@ const styles = {
   roomTag: { color: colors.textMuted, fontSize: 14, letterSpacing: 1 },
   center: { textAlign: 'center' },
   title: { margin: 0, fontSize: 34, letterSpacing: 0.5 },
+  tagline: { margin: '10px 0 0', color: colors.textMuted, fontSize: 12, fontWeight: 600, letterSpacing: 1.1 },
   subtitle: { margin: '6px 0 0', color: colors.textMuted, fontSize: 15 },
   card: {
     width: 'min(100%, 420px)',
