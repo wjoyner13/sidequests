@@ -66,6 +66,22 @@ function saveName(name) {
   }
 }
 
+function loadBest() {
+  try {
+    return Number(localStorage.getItem('riff:best')) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveBest(ms) {
+  try {
+    localStorage.setItem('riff:best', String(ms));
+  } catch {
+    // Best time just won't survive a reload.
+  }
+}
+
 function formatMs(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
@@ -109,6 +125,10 @@ export default function RiffMaster() {
     () => new URLSearchParams(window.location.search).get('room')?.toUpperCase() || ''
   );
   const [room, setRoom] = useState(null); // joined room code
+  const [solo, setSolo] = useState(false);
+  // Solo personal best, plus whether the run that just ended beat it.
+  const [best, setBest] = useState(loadBest);
+  const [newBest, setNewBest] = useState(false);
   const [error, setError] = useState('');
   const [players, setPlayers] = useState([]);
 
@@ -202,15 +222,27 @@ export default function RiffMaster() {
       } else if (msg.type === 'finish') {
         setProgress((p) => ({ ...p, [msg.id]: ROUNDS }));
         setFinishes((f) => ({ ...f, [msg.id]: msg.ms }));
+        if (solo) {
+          const beat = best == null || msg.ms < best;
+          if (beat) {
+            setBest(msg.ms);
+            saveBest(msg.ms);
+          }
+          setNewBest(beat);
+        }
         if (!resultsTimer.current) {
-          resultsTimer.current = setTimeout(() => {
-            stopGame();
-            setPhase('results');
-          }, RESULTS_GRACE_MS);
+          resultsTimer.current = setTimeout(
+            () => {
+              stopGame();
+              setPhase('results');
+            },
+            // Nobody else can finish in solo, so skip the tie-break wait.
+            solo ? 600 : RESULTS_GRACE_MS
+          );
         }
       }
     },
-    [playRound, stopGame]
+    [playRound, stopGame, solo, best]
   );
 
   const handleRef = useRef(handleMessage);
@@ -313,6 +345,11 @@ export default function RiffMaster() {
   };
 
   const leaveRoom = () => {
+    // Room games are also torn down by the join effect; solo has no effect to do it.
+    stopGame();
+    clearTimeout(resultsTimer.current);
+    resultsTimer.current = null;
+    setSolo(false);
     setRoom(null);
     setPlayers([]);
     setPhase('lobby');
@@ -323,7 +360,17 @@ export default function RiffMaster() {
 
   const startGame = () => send({ type: 'start', seed: Math.floor(Math.random() * 2 ** 32) });
 
-  if (!room) {
+  // Solo skips the room entirely: no network, straight into the countdown.
+  const startSolo = () => {
+    const trimmed = name.trim();
+    if (trimmed) saveName(trimmed);
+    setError('');
+    setSolo(true);
+    setPlayers([{ ...me, name: trimmed || 'You' }]);
+    startGame();
+  };
+
+  if (!room && !solo) {
     return (
       <Home
         name={name}
@@ -331,6 +378,7 @@ export default function RiffMaster() {
         codeInput={codeInput}
         setCodeInput={setCodeInput}
         error={error}
+        onSolo={startSolo}
         onCreate={() => enterRoom(randomCode())}
         onJoin={() => {
           const code = codeInput.trim().toUpperCase();
@@ -349,7 +397,7 @@ export default function RiffMaster() {
         <button type="button" style={styles.linkButton} onClick={leaveRoom}>
           ← Leave
         </button>
-        <span style={styles.roomTag}>Room {room}</span>
+        <span style={styles.roomTag}>{solo ? 'Solo' : `Room ${room}`}</span>
       </header>
 
       {error && <p style={styles.error}>{error}</p>}
@@ -372,6 +420,10 @@ export default function RiffMaster() {
         </div>
       )}
 
+      {phase === 'playing' && solo && best != null && (
+        <p style={styles.hint}>Best: {formatMs(best)}</p>
+      )}
+
       {phase === 'playing' && (
         <>
           <div style={styles.center}>
@@ -383,12 +435,16 @@ export default function RiffMaster() {
             </p>
           </div>
           <PadGrid lit={lit} disabled={status !== 'repeat'} onPad={onPad} />
-          <Scoreboard standings={standings} meId={me.id} />
+          {!solo && <Scoreboard standings={standings} meId={me.id} />}
         </>
       )}
 
       {phase === 'results' && (
-        <Results standings={standings} meId={me.id} isHost={isHost} onRematch={startGame} />
+        solo ? (
+          <SoloResults ms={finishes[me.id]} best={best} newBest={newBest} onRematch={startGame} />
+        ) : (
+          <Results standings={standings} meId={me.id} isHost={isHost} onRematch={startGame} />
+        )
       )}
     </div>
   );
@@ -413,12 +469,12 @@ function rankPlayers(players, progress, finishes) {
     });
 }
 
-function Home({ name, setName, codeInput, setCodeInput, error, onCreate, onJoin }) {
+function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate, onJoin }) {
   return (
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
         <h1 style={styles.title}>Riff Master</h1>
-        <p style={styles.subtitle}>Race your friends to repeat a {ROUNDS}-note riff</p>
+        <p style={styles.subtitle}>Repeat a {ROUNDS}-note riff — solo or racing friends</p>
       </header>
 
       <div style={styles.card}>
@@ -434,11 +490,15 @@ function Home({ name, setName, codeInput, setCodeInput, error, onCreate, onJoin 
           />
         </label>
 
-        <button type="button" style={styles.primaryButton} onClick={onCreate}>
-          Create a room
+        <button type="button" style={styles.primaryButton} onClick={onSolo}>
+          Play solo
         </button>
 
-        <div style={styles.divider}>or join one</div>
+        <div style={styles.divider}>or race friends</div>
+
+        <button type="button" style={{ ...styles.secondaryButton, width: '100%' }} onClick={onCreate}>
+          Create a room
+        </button>
 
         <form
           style={styles.joinRow}
@@ -578,6 +638,24 @@ function Scoreboard({ standings, meId }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function SoloResults({ ms, best, newBest, onRematch }) {
+  return (
+    <div style={styles.lobby}>
+      <div style={styles.center}>
+        <p style={styles.subtitle}>Riff mastered! 🎸</p>
+        <h2 style={styles.winner}>{formatMs(ms)}</h2>
+        <p style={{ ...styles.subtitle, color: newBest ? colors.accent : colors.textMuted }}>
+          {newBest ? 'New personal best!' : `Best: ${formatMs(best)}`}
+        </p>
+      </div>
+
+      <button type="button" style={styles.primaryButton} onClick={onRematch}>
+        Play again
+      </button>
+    </div>
   );
 }
 
