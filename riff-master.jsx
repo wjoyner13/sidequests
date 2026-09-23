@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isOnline, joinRoom } from './src/riffNet.js';
+import logoUrl from './src/assets/riff-logo.png';
 
 // Palette: DABFFF lavender, 907AD6 purple, 4F518C indigo, 2C2A4A night, 7FDEFF sky.
 // The page sits a shade darker than night (1E1C36) so night-colored cards lift off it.
@@ -604,8 +605,10 @@ function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate,
   return (
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
-        <h1 style={styles.title}>Riff Master</h1>
-        <p style={styles.subtitle}>Repeat a {ROUNDS}-note riff — solo or racing friends</p>
+        <h1 style={styles.title}>
+          <img src={logoUrl} alt="RIFF/GOD" style={styles.logo} />
+        </h1>
+        <p style={styles.tagline}>REMEMBER RIFFS AND CHALLENGE FRIENDS</p>
       </header>
 
       <div style={styles.card}>
@@ -670,7 +673,9 @@ function DemoHome({ name, setName, onStart }) {
   return (
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
-        <h1 style={styles.title}>Riff Master</h1>
+        <h1 style={styles.title}>
+          <img src={logoUrl} alt="RIFF/GOD" style={styles.logo} />
+        </h1>
         <p style={styles.subtitle}>Demo race · test build</p>
       </header>
 
@@ -698,8 +703,12 @@ function DemoHome({ name, setName, onStart }) {
   );
 }
 
+// A race needs someone to race: Start stays locked until a friend is in the room.
+const MIN_PLAYERS = 2;
+
 function Lobby({ room, players, hostId, meId, isHost, onStart }) {
   const [copied, setCopied] = useState(false);
+  const canStart = players.length >= MIN_PLAYERS;
 
   const share = async () => {
     const url = window.location.href;
@@ -737,12 +746,23 @@ function Lobby({ room, players, hostId, meId, isHost, onStart }) {
               {p.id === hostId && <span style={styles.badge}>Host</span>}
             </li>
           ))}
+          {!canStart && (
+            <li style={{ ...styles.playerRow, ...styles.muted }}>
+              <span>Waiting for a friend to join…</span>
+              <span style={styles.pulse} aria-hidden="true" />
+            </li>
+          )}
         </ul>
       </div>
 
       {isHost ? (
-        <button type="button" style={styles.primaryButton} onClick={onStart}>
-          Start race
+        <button
+          type="button"
+          style={{ ...styles.primaryButton, ...(canStart ? null : styles.buttonDisabled) }}
+          disabled={!canStart}
+          onClick={() => canStart && onStart()}
+        >
+          {canStart ? 'Start race' : 'Invite a friend to start'}
         </button>
       ) : (
         <p style={styles.hint}>Waiting for the host to start…</p>
@@ -907,7 +927,10 @@ const styles = {
   },
   roomTag: { color: colors.textMuted, fontSize: 14, letterSpacing: 1 },
   center: { textAlign: 'center' },
-  title: { margin: 0, fontSize: 34, letterSpacing: 0.5 },
+  title: { margin: 0, lineHeight: 0 },
+  // The logo PNG is 244px wide; showing it at native size keeps it crisp.
+  logo: { width: 'min(244px, 70vw)', height: 'auto' },
+  tagline: { margin: '10px 0 0', color: colors.textMuted, fontSize: 12, fontWeight: 600, letterSpacing: 1.1 },
   subtitle: { margin: '6px 0 0', color: colors.textMuted, fontSize: 15 },
   card: {
     width: 'min(100%, 420px)',
@@ -982,6 +1005,14 @@ const styles = {
   scoreName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   bar: { height: 8, background: colors.surfaceRaised, borderRadius: 999, overflow: 'hidden' },
   barFill: { height: '100%', background: colors.accent, borderRadius: 999, transition: 'width 200ms' },
+  buttonDisabled: { opacity: 0.45, cursor: 'not-allowed' },
+  pulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    background: colors.accent,
+    animation: 'riff-pulse 1.2s ease-in-out infinite',
+  },
   slipTag: { color: colors.danger, fontWeight: 600 },
   scoreCount: { color: colors.textMuted, fontVariantNumeric: 'tabular-nums' },
   winner: { margin: '4px 0 0', fontSize: 32 },
