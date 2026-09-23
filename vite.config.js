@@ -9,6 +9,7 @@ export default defineConfig({
       input: {
         main: 'index.html',
         digest: 'digest.html',
+        riff: 'riff.html',
       },
     },
   },
