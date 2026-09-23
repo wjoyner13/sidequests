@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isOnline, joinRoom } from './src/riffNet.js';
 
 // Palette: DABFFF lavender, 907AD6 purple, 4F518C indigo, 2C2A4A night, 7FDEFF sky.
+// The page sits a shade darker than night (1E1C36) so night-colored cards lift off it.
 const colors = {
-  bg: '#2C2A4A',
-  surface: '#38375F',
-  surfaceRaised: '#45467A',
+  bg: '#1E1C36',
+  surface: '#2C2A4A',
+  surfaceRaised: '#3C3B66',
   text: '#F4EEFF',
   textMuted: '#BDB3E0',
   accent: '#7FDEFF',
