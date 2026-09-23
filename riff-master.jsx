@@ -1,26 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isOnline, joinRoom } from './src/riffNet.js';
 
+// Palette: DABFFF lavender, 907AD6 purple, 4F518C indigo, 2C2A4A night, 7FDEFF sky.
 const colors = {
-  bg: '#2C3531',
-  surface: '#353F3A',
-  surfaceRaised: '#3F4A44',
-  text: '#F2F0EA',
-  textMuted: '#BCC5BF',
-  accent: '#D9A441',
-  border: 'rgba(242,240,234,0.14)',
-  danger: '#E39B87',
+  bg: '#2C2A4A',
+  surface: '#38375F',
+  surfaceRaised: '#45467A',
+  text: '#F4EEFF',
+  textMuted: '#BDB3E0',
+  accent: '#7FDEFF',
+  onAccent: '#2C2A4A',
+  border: 'rgba(218,191,255,0.18)',
+  // The palette has no warm tone; a soft pink reads as "oops" without clashing.
+  danger: '#FF9EB5',
 };
 
 // One pad per note. Notes climb a C-major arpeggio so any sequence sounds musical.
 const PADS = [
-  { id: 'green', note: 'C4', freq: 261.63, base: '#2E8B57', lit: '#6FE3A0', key: '1' },
-  { id: 'red', note: 'E4', freq: 329.63, base: '#B23A3A', lit: '#FF7A7A', key: '2' },
-  { id: 'yellow', note: 'G4', freq: 392.0, base: '#C9A227', lit: '#FFE066', key: '3' },
-  { id: 'blue', note: 'C5', freq: 523.25, base: '#2F5FA8', lit: '#74A8FF', key: '4' },
+  { id: 'lavender', note: 'C4', freq: 261.63, base: '#DABFFF', lit: '#F6EEFF', ink: '#2C2A4A', key: '1' },
+  { id: 'purple', note: 'E4', freq: 329.63, base: '#907AD6', lit: '#C3B3FF', ink: '#2C2A4A', key: '2' },
+  { id: 'indigo', note: 'G4', freq: 392.0, base: '#4F518C', lit: '#8A8DE0', ink: '#DABFFF', key: '3' },
+  { id: 'sky', note: 'C5', freq: 523.25, base: '#7FDEFF', lit: '#D2F5FF', ink: '#2C2A4A', key: '4' },
 ];
 
-const ROUNDS = 10;
+const ROUNDS = 10; // default race length
+const TEMPOS = {
+  relaxed: { start: 620, min: 340 },
+  normal: { start: 520, min: 260 },
+  fast: { start: 420, min: 200 },
+};
+const COUNTDOWN_STEP_MS = 800;
 const TAP_MS = 180;
 // Grace window after the first finish, so a near-tie decided by network lag
 // still goes to whoever was actually faster.
@@ -31,7 +40,7 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Deterministic PRNG: every phone that gets the same seed builds the same riff.
-function makeSequence(seed) {
+function makeSequence(seed, rounds) {
   let a = seed >>> 0;
   const next = () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -40,11 +49,72 @@ function makeSequence(seed) {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  return Array.from({ length: ROUNDS }, () => Math.floor(next() * PADS.length));
+  return Array.from({ length: rounds }, () => Math.floor(next() * PADS.length));
 }
 
 // Playback gets brisker as the riff grows.
-const noteMsForRound = (round) => Math.max(260, 520 - round * 26);
+const noteMsForRound = (round, tempo = 'normal') => {
+  const t = TEMPOS[tempo] || TEMPOS.normal;
+  return Math.max(t.min, t.start - round * 26);
+};
+
+// Simulated friends for the demo race. Per-note tap speed, time to react
+// after the riff ends, and chance of fumbling a round (rises with length).
+const BOT_NAMES = ['Maya', 'Leo', 'Priya', 'Sam', 'Jordan'];
+const SKILLS = {
+  easy: { tapMs: 640, reactMs: 750, slip: 0.1, slipPerRound: 0.03 },
+  normal: { tapMs: 440, reactMs: 520, slip: 0.05, slipPerRound: 0.02 },
+  hard: { tapMs: 320, reactMs: 380, slip: 0.03, slipPerRound: 0.012 },
+  pro: { tapMs: 240, reactMs: 280, slip: 0.01, slipPerRound: 0.006 },
+};
+const DEMO_DEFAULTS = { friends: 3, skill: 'normal', rounds: ROUNDS, tempo: 'normal' };
+
+// Plans one bot's whole race up front as timed events, mirroring the real
+// game's pacing: watch the riff, repeat it, maybe slip and redo the round.
+function planBotRace(skill, rounds, tempo) {
+  const s = SKILLS[skill] || SKILLS.normal;
+  // Each friend gets their own pace so a same-skill pack doesn't finish in lockstep.
+  const pace = 0.8 + Math.random() * 0.45;
+  const jitter = (ms) => ms * pace * (0.75 + Math.random() * 0.5);
+  const events = [];
+  let t = 3 * COUNTDOWN_STEP_MS;
+  for (let r = 1; r <= rounds; r++) {
+    for (;;) {
+      t += 500 + r * (noteMsForRound(r, tempo) + 140); // watching the riff
+      if (Math.random() < s.slip + s.slipPerRound * r) {
+        // Fumbles partway through, buzzes, then hears the riff again.
+        t += jitter(s.reactMs) + jitter(s.tapMs) * Math.floor(Math.random() * r);
+        events.push({ at: t, msg: { type: 'slip' } });
+        t += 900;
+        continue;
+      }
+      t += jitter(s.reactMs) + jitter(s.tapMs) * (r - 1);
+      break;
+    }
+    events.push({
+      at: t,
+      msg: r === rounds ? { type: 'finish', ms: Math.round(t - 3 * COUNTDOWN_STEP_MS) } : { type: 'progress', cleared: r },
+    });
+    t += 500;
+  }
+  return events;
+}
+
+function loadDemoSettings() {
+  try {
+    return { ...DEMO_DEFAULTS, ...JSON.parse(localStorage.getItem('riff:demo') || '{}') };
+  } catch {
+    return DEMO_DEFAULTS;
+  }
+}
+
+function saveDemoSettings(settings) {
+  try {
+    localStorage.setItem('riff:demo', JSON.stringify(settings));
+  } catch {
+    // Settings just reset next visit.
+  }
+}
 
 function randomCode() {
   return Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
@@ -126,6 +196,10 @@ export default function RiffMaster() {
   );
   const [room, setRoom] = useState(null); // joined room code
   const [solo, setSolo] = useState(false);
+  const [demo, setDemo] = useState(null); // demo settings while racing simulated friends
+  const [demoSettings, setDemoSettings] = useState(loadDemoSettings);
+  const [rounds, setRounds] = useState(ROUNDS);
+  const [slips, setSlips] = useState({}); // id -> timestamp of their latest wrong note
   // Solo personal best, plus whether the run that just ended beat it.
   const [best, setBest] = useState(loadBest);
   const [newBest, setNewBest] = useState(false);
@@ -143,7 +217,17 @@ export default function RiffMaster() {
   const [lit, setLit] = useState({});
 
   const connRef = useRef(null);
-  const game = useRef({ seq: [], round: 1, idx: 0, accepting: false, startedAt: 0, token: 0 });
+  const game = useRef({
+    seq: [],
+    round: 1,
+    rounds: ROUNDS,
+    tempo: 'normal',
+    idx: 0,
+    accepting: false,
+    startedAt: 0,
+    token: 0,
+  });
+  const botTimers = useRef([]);
   const litTimers = useRef({});
   const resultsTimer = useRef(null);
 
@@ -165,6 +249,8 @@ export default function RiffMaster() {
   const stopGame = useCallback(() => {
     game.current.token++;
     game.current.accepting = false;
+    botTimers.current.forEach(clearTimeout);
+    botTimers.current = [];
   }, []);
 
   const playRound = useCallback(async () => {
@@ -174,7 +260,7 @@ export default function RiffMaster() {
     g.idx = 0;
     setRound(g.round);
     setStatus('watch');
-    const noteMs = noteMsForRound(g.round);
+    const noteMs = noteMsForRound(g.round, g.tempo);
 
     await sleep(500);
     for (let i = 0; i < g.round; i++) {
@@ -199,16 +285,33 @@ export default function RiffMaster() {
         // rely on its token to know they've been cancelled.
         const g = game.current;
         const token = g.token;
-        Object.assign(g, { seq: makeSequence(msg.seed), round: 1, idx: 0 });
+        const raceRounds = msg.rounds || ROUNDS;
+        Object.assign(g, {
+          seq: makeSequence(msg.seed, raceRounds),
+          rounds: raceRounds,
+          tempo: msg.tempo || 'normal',
+          round: 1,
+          idx: 0,
+        });
         setProgress({});
         setFinishes({});
+        setSlips({});
         setRound(1);
+        setRounds(raceRounds);
+        if (demo) {
+          // Bot events replay through this same handler, just like a friend's messages.
+          for (const bot of players.filter((p) => p.bot)) {
+            for (const { at, msg: botMsg } of planBotRace(demo.skill, raceRounds, g.tempo)) {
+              botTimers.current.push(setTimeout(() => handleRef.current({ ...botMsg, id: bot.id }), at));
+            }
+          }
+        }
         setPhase('countdown');
         (async () => {
           for (let n = 3; n > 0; n--) {
             if (token !== g.token) return;
             setCountdown(n);
-            await sleep(800);
+            await sleep(COUNTDOWN_STEP_MS);
           }
           if (token !== g.token) return;
           // Each phone times its own run from here, so the race is judged on
@@ -219,8 +322,10 @@ export default function RiffMaster() {
         })();
       } else if (msg.type === 'progress') {
         setProgress((p) => ({ ...p, [msg.id]: Math.max(p[msg.id] || 0, msg.cleared) }));
+      } else if (msg.type === 'slip') {
+        setSlips((s) => ({ ...s, [msg.id]: Date.now() }));
       } else if (msg.type === 'finish') {
-        setProgress((p) => ({ ...p, [msg.id]: ROUNDS }));
+        setProgress((p) => ({ ...p, [msg.id]: game.current.rounds }));
         setFinishes((f) => ({ ...f, [msg.id]: msg.ms }));
         if (solo) {
           const beat = best == null || msg.ms < best;
@@ -242,7 +347,7 @@ export default function RiffMaster() {
         }
       }
     },
-    [playRound, stopGame, solo, best]
+    [playRound, stopGame, solo, best, demo, players]
   );
 
   const handleRef = useRef(handleMessage);
@@ -298,6 +403,7 @@ export default function RiffMaster() {
         g.accepting = false;
         synth(110, 500, 'sawtooth');
         setStatus('wrong');
+        send({ type: 'slip', id: me.id });
         const token = g.token;
         setTimeout(() => token === g.token && playRound(), 900);
         return;
@@ -307,7 +413,7 @@ export default function RiffMaster() {
       if (g.idx < g.round) return;
 
       g.accepting = false;
-      if (g.round === ROUNDS) {
+      if (g.round === g.rounds) {
         setStatus('done');
         send({ type: 'finish', id: me.id, ms: Math.round(performance.now() - g.startedAt) });
         return;
@@ -350,6 +456,7 @@ export default function RiffMaster() {
     clearTimeout(resultsTimer.current);
     resultsTimer.current = null;
     setSolo(false);
+    setDemo(null);
     setRoom(null);
     setPlayers([]);
     setPhase('lobby');
@@ -358,7 +465,30 @@ export default function RiffMaster() {
     window.history.replaceState(null, '', url);
   };
 
-  const startGame = () => send({ type: 'start', seed: Math.floor(Math.random() * 2 ** 32) });
+  const startGame = (config = demo) =>
+    send({
+      type: 'start',
+      seed: Math.floor(Math.random() * 2 ** 32),
+      rounds: config?.rounds || ROUNDS,
+      tempo: config?.tempo || 'normal',
+    });
+
+  // Demo race: you plus simulated friends, all local, with tunable settings.
+  const startDemo = (settings) => {
+    const trimmed = name.trim();
+    if (trimmed) saveName(trimmed);
+    saveDemoSettings(settings);
+    setDemoSettings(settings);
+    setError('');
+    setDemo(settings);
+    const bots = BOT_NAMES.slice(0, settings.friends).map((botName, i) => ({
+      id: `bot-${i}`,
+      name: botName,
+      joinedAt: me.joinedAt + i + 1,
+      bot: true,
+    }));
+    setPlayers([{ ...me, name: trimmed || 'You' }, ...bots]);
+  };
 
   // Solo skips the room entirely: no network, straight into the countdown.
   const startSolo = () => {
@@ -370,7 +500,13 @@ export default function RiffMaster() {
     startGame();
   };
 
-  if (!room && !solo) {
+  useEffect(() => {
+    if (demo && phase === 'lobby' && players.some((p) => p.bot)) startGame(demo);
+    // Kick off once, right after startDemo has put the bots in the room.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, players]);
+
+  if (!room && !solo && !demo) {
     return (
       <Home
         name={name}
@@ -379,6 +515,8 @@ export default function RiffMaster() {
         setCodeInput={setCodeInput}
         error={error}
         onSolo={startSolo}
+        demoSettings={demoSettings}
+        onDemo={startDemo}
         onCreate={() => enterRoom(randomCode())}
         onJoin={() => {
           const code = codeInput.trim().toUpperCase();
@@ -397,7 +535,7 @@ export default function RiffMaster() {
         <button type="button" style={styles.linkButton} onClick={leaveRoom}>
           ← Leave
         </button>
-        <span style={styles.roomTag}>{solo ? 'Solo' : `Room ${room}`}</span>
+        <span style={styles.roomTag}>{solo ? 'Solo' : demo ? 'Demo race' : `Room ${room}`}</span>
       </header>
 
       {error && <p style={styles.error}>{error}</p>}
@@ -409,13 +547,13 @@ export default function RiffMaster() {
           hostId={host?.id}
           meId={me.id}
           isHost={isHost}
-          onStart={startGame}
+          onStart={() => startGame()}
         />
       )}
 
       {phase === 'countdown' && (
         <div style={styles.center}>
-          <p style={styles.subtitle}>First to clear round {ROUNDS} wins</p>
+          <p style={styles.subtitle}>{solo ? `Clear all ${rounds} rounds` : `First to clear round ${rounds} wins`}</p>
           <div style={styles.countdown}>{countdown}</div>
         </div>
       )}
@@ -428,22 +566,29 @@ export default function RiffMaster() {
         <>
           <div style={styles.center}>
             <p style={styles.roundLabel}>
-              Round {round} / {ROUNDS}
+              Round {round} / {rounds}
             </p>
             <p style={{ ...styles.statusLine, color: status === 'wrong' ? colors.danger : colors.textMuted }}>
               {STATUS_COPY[status]}
             </p>
           </div>
           <PadGrid lit={lit} disabled={status !== 'repeat'} onPad={onPad} />
-          {!solo && <Scoreboard standings={standings} meId={me.id} />}
+          {!solo && <Scoreboard standings={standings} meId={me.id} rounds={rounds} slips={slips} />}
         </>
       )}
 
       {phase === 'results' && (
         solo ? (
-          <SoloResults ms={finishes[me.id]} best={best} newBest={newBest} onRematch={startGame} />
+          <SoloResults ms={finishes[me.id]} best={best} newBest={newBest} onRematch={() => startGame()} />
         ) : (
-          <Results standings={standings} meId={me.id} isHost={isHost} onRematch={startGame} />
+          <Results
+            standings={standings}
+            meId={me.id}
+            rounds={rounds}
+            isHost={isHost}
+            onRematch={() => startGame()}
+            onSettings={demo ? leaveRoom : null}
+          />
         )
       )}
     </div>
@@ -469,7 +614,10 @@ function rankPlayers(players, progress, finishes) {
     });
 }
 
-function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate, onJoin }) {
+function Home({ name, setName, codeInput, setCodeInput, error, onSolo, demoSettings, onDemo, onCreate, onJoin }) {
+  const [demoOpen, setDemoOpen] = useState(false);
+  const [draft, setDraft] = useState(demoSettings);
+
   return (
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
@@ -525,11 +673,79 @@ function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate,
         {error && <p style={styles.error}>{error}</p>}
       </div>
 
+      <div style={styles.card}>
+        <button
+          type="button"
+          style={{ ...styles.linkButton, textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}
+          onClick={() => setDemoOpen((o) => !o)}
+          aria-expanded={demoOpen}
+        >
+          <span>Demo race vs simulated friends</span>
+          <span>{demoOpen ? '−' : '+'}</span>
+        </button>
+        {demoOpen && (
+          <>
+            <Segmented
+              label="Friends"
+              value={draft.friends}
+              options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))}
+              onChange={(friends) => setDraft((d) => ({ ...d, friends }))}
+            />
+            <Segmented
+              label="Their skill"
+              value={draft.skill}
+              options={Object.keys(SKILLS).map((k) => ({ value: k, label: k[0].toUpperCase() + k.slice(1) }))}
+              onChange={(skill) => setDraft((d) => ({ ...d, skill }))}
+            />
+            <Segmented
+              label="Rounds to win"
+              value={draft.rounds}
+              options={[5, 8, 10, 12, 15].map((n) => ({ value: n, label: String(n) }))}
+              onChange={(rounds) => setDraft((d) => ({ ...d, rounds }))}
+            />
+            <Segmented
+              label="Riff speed"
+              value={draft.tempo}
+              options={Object.keys(TEMPOS).map((k) => ({ value: k, label: k[0].toUpperCase() + k.slice(1) }))}
+              onChange={(tempo) => setDraft((d) => ({ ...d, tempo }))}
+            />
+            <button type="button" style={{ ...styles.primaryButton, width: '100%' }} onClick={() => onDemo(draft)}>
+              Start demo race
+            </button>
+          </>
+        )}
+      </div>
+
       {!isOnline && (
         <p style={styles.hint}>
           Test mode: rooms only link tabs in this browser until Supabase is configured.
         </p>
       )}
+    </div>
+  );
+}
+
+function Segmented({ label, value, options, onChange }) {
+  return (
+    <div style={styles.label}>
+      {label}
+      <div style={styles.segmented} role="radiogroup" aria-label={label}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={o.value === value}
+            onClick={() => onChange(o.value)}
+            style={{
+              ...styles.segment,
+              ...(o.value === value ? styles.segmentOn : null),
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -613,30 +829,52 @@ function PadGrid({ lit, disabled, onPad }) {
             opacity: disabled && !lit[pad.id] ? 0.72 : 1,
           }}
         >
-          <span style={styles.note}>{pad.note}</span>
+          <span style={{ ...styles.note, color: pad.ink }}>{pad.note}</span>
         </button>
       ))}
     </div>
   );
 }
 
-function Scoreboard({ standings, meId }) {
+const SLIP_SHOW_MS = 1100;
+
+function Scoreboard({ standings, meId, rounds, slips }) {
+  // Re-render shortly after a slip so its "oops" tag clears on time.
+  const [, tick] = useState(0);
+  const latestSlip = Math.max(0, ...Object.values(slips));
+  useEffect(() => {
+    const wait = latestSlip + SLIP_SHOW_MS - Date.now();
+    if (wait <= 0) return;
+    const t = setTimeout(() => tick((n) => n + 1), wait);
+    return () => clearTimeout(t);
+  }, [latestSlip]);
+
   return (
     <ul style={{ ...styles.playerList, ...styles.card, gap: 10 }}>
-      {standings.map((p) => (
-        <li key={p.id} style={styles.scoreRow}>
-          <span style={styles.scoreName}>
-            {p.name}
-            {p.id === meId && <span style={styles.muted}> (you)</span>}
-          </span>
-          <div style={styles.bar}>
-            <div style={{ ...styles.barFill, width: `${(p.cleared / ROUNDS) * 100}%` }} />
-          </div>
-          <span style={styles.scoreCount}>
-            {p.cleared}/{ROUNDS}
-          </span>
-        </li>
-      ))}
+      {standings.map((p) => {
+        const slipped = Date.now() - (slips[p.id] || 0) < SLIP_SHOW_MS;
+        return (
+          <li key={p.id} style={styles.scoreRow}>
+            <span style={styles.scoreName}>
+              {p.name}
+              {p.id === meId && <span style={styles.muted}> (you)</span>}
+              {slipped && <span style={styles.slipTag}> oops!</span>}
+            </span>
+            <div style={styles.bar}>
+              <div
+                style={{
+                  ...styles.barFill,
+                  width: `${(p.cleared / rounds) * 100}%`,
+                  background: slipped ? colors.danger : p.id === meId ? colors.accent : '#907AD6',
+                }}
+              />
+            </div>
+            <span style={styles.scoreCount}>
+              {p.cleared}/{rounds}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -659,7 +897,7 @@ function SoloResults({ ms, best, newBest, onRematch }) {
   );
 }
 
-function Results({ standings, meId, isHost, onRematch }) {
+function Results({ standings, meId, rounds, isHost, onRematch, onSettings }) {
   const winner = standings[0];
   return (
     <div style={styles.lobby}>
@@ -675,7 +913,7 @@ function Results({ standings, meId, isHost, onRematch }) {
               {i + 1}. {p.name}
               {p.id === meId && <span style={styles.muted}> (you)</span>}
             </span>
-            <span style={styles.muted}>{p.ms != null ? formatMs(p.ms) : `${p.cleared}/${ROUNDS} rounds`}</span>
+            <span style={styles.muted}>{p.ms != null ? formatMs(p.ms) : `${p.cleared}/${rounds} rounds`}</span>
           </li>
         ))}
       </ol>
@@ -686,6 +924,11 @@ function Results({ standings, meId, isHost, onRematch }) {
         </button>
       ) : (
         <p style={styles.hint}>Waiting for the host to start a rematch…</p>
+      )}
+      {onSettings && (
+        <button type="button" style={styles.linkButton} onClick={onSettings}>
+          Change demo settings
+        </button>
       )}
     </div>
   );
@@ -747,7 +990,7 @@ const styles = {
   codeInput: { flex: 1, letterSpacing: 6, textAlign: 'center', fontWeight: 700, textTransform: 'uppercase' },
   joinRow: { display: 'flex', gap: 10, margin: 0 },
   divider: { textAlign: 'center', color: colors.textMuted, fontSize: 13 },
-  primaryButton: { ...button, background: colors.accent, color: '#2C3531', width: 'min(100%, 420px)' },
+  primaryButton: { ...button, background: colors.accent, color: colors.onAccent, width: 'min(100%, 420px)' },
   secondaryButton: { ...button, background: colors.surfaceRaised, color: colors.text, border: `1px solid ${colors.border}` },
   linkButton: { ...button, background: 'none', color: colors.accent, padding: '6px 0', fontSize: 15 },
   error: { margin: 0, color: colors.danger, fontSize: 14, textAlign: 'center' },
@@ -778,7 +1021,8 @@ const styles = {
     WebkitUserSelect: 'none',
   },
   pad: {
-    border: 'none',
+    // A faint rim keeps the indigo pad visible against the night background.
+    border: '1px solid rgba(218,191,255,0.14)',
     borderRadius: 20,
     cursor: 'pointer',
     display: 'flex',
@@ -790,11 +1034,23 @@ const styles = {
     touchAction: 'none',
     WebkitTouchCallout: 'none',
   },
-  note: { color: 'rgba(0,0,0,0.45)', fontWeight: 700, fontSize: 18 },
+  note: { fontWeight: 700, fontSize: 18, opacity: 0.6 },
   scoreRow: { display: 'grid', gridTemplateColumns: '1fr 1.3fr auto', alignItems: 'center', gap: 10, fontSize: 14 },
   scoreName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   bar: { height: 8, background: colors.surfaceRaised, borderRadius: 999, overflow: 'hidden' },
   barFill: { height: '100%', background: colors.accent, borderRadius: 999, transition: 'width 200ms' },
+  slipTag: { color: colors.danger, fontWeight: 600 },
+  segmented: { display: 'flex', gap: 6 },
+  segment: {
+    ...button,
+    flex: 1,
+    padding: '10px 4px',
+    fontSize: 14,
+    background: colors.surfaceRaised,
+    color: colors.textMuted,
+    border: `1px solid ${colors.border}`,
+  },
+  segmentOn: { background: colors.accent, color: colors.onAccent, border: `1px solid ${colors.accent}` },
   scoreCount: { color: colors.textMuted, fontVariantNumeric: 'tabular-nums' },
   winner: { margin: '4px 0 0', fontSize: 32 },
 };
