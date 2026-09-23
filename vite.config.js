@@ -10,6 +10,7 @@ export default defineConfig({
         main: 'index.html',
         digest: 'digest.html',
         riff: 'riff.html',
+        riffDemo: 'riff-demo.html',
       },
     },
   },

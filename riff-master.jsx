@@ -67,7 +67,9 @@ const SKILLS = {
   hard: { tapMs: 320, reactMs: 380, slip: 0.03, slipPerRound: 0.012 },
   pro: { tapMs: 240, reactMs: 280, slip: 0.01, slipPerRound: 0.006 },
 };
-const DEMO_DEFAULTS = { friends: 3, skill: 'normal', rounds: ROUNDS, tempo: 'normal' };
+// Settings for the test-only demo page (riff-demo.html). Edit here to tune.
+// skill: easy | normal | hard | pro — tempo: relaxed | normal | fast
+const DEMO_CONFIG = { friends: 3, skill: 'normal', rounds: ROUNDS, tempo: 'normal' };
 
 // Plans one bot's whole race up front as timed events, mirroring the real
 // game's pacing: watch the riff, repeat it, maybe slip and redo the round.
@@ -98,22 +100,6 @@ function planBotRace(skill, rounds, tempo) {
     t += 500;
   }
   return events;
-}
-
-function loadDemoSettings() {
-  try {
-    return { ...DEMO_DEFAULTS, ...JSON.parse(localStorage.getItem('riff:demo') || '{}') };
-  } catch {
-    return DEMO_DEFAULTS;
-  }
-}
-
-function saveDemoSettings(settings) {
-  try {
-    localStorage.setItem('riff:demo', JSON.stringify(settings));
-  } catch {
-    // Settings just reset next visit.
-  }
 }
 
 function randomCode() {
@@ -187,7 +173,8 @@ function useSynth() {
   }, []);
 }
 
-export default function RiffMaster() {
+// demoMode: the test-only build (riff-demo.html) that races simulated friends.
+export default function RiffMaster({ demoMode = false }) {
   const synth = useSynth();
   const [me] = useState(() => ({ id: crypto.randomUUID(), joinedAt: Date.now() }));
   const [name, setName] = useState(loadName);
@@ -197,7 +184,6 @@ export default function RiffMaster() {
   const [room, setRoom] = useState(null); // joined room code
   const [solo, setSolo] = useState(false);
   const [demo, setDemo] = useState(null); // demo settings while racing simulated friends
-  const [demoSettings, setDemoSettings] = useState(loadDemoSettings);
   const [rounds, setRounds] = useState(ROUNDS);
   const [slips, setSlips] = useState({}); // id -> timestamp of their latest wrong note
   // Solo personal best, plus whether the run that just ended beat it.
@@ -473,12 +459,10 @@ export default function RiffMaster() {
       tempo: config?.tempo || 'normal',
     });
 
-  // Demo race: you plus simulated friends, all local, with tunable settings.
-  const startDemo = (settings) => {
+  // Demo race: you plus simulated friends, all local, using DEMO_CONFIG.
+  const startDemo = (settings = DEMO_CONFIG) => {
     const trimmed = name.trim();
     if (trimmed) saveName(trimmed);
-    saveDemoSettings(settings);
-    setDemoSettings(settings);
     setError('');
     setDemo(settings);
     const bots = BOT_NAMES.slice(0, settings.friends).map((botName, i) => ({
@@ -506,6 +490,10 @@ export default function RiffMaster() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, players]);
 
+  if (demoMode && !demo) {
+    return <DemoHome name={name} setName={setName} onStart={() => startDemo()} />;
+  }
+
   if (!room && !solo && !demo) {
     return (
       <Home
@@ -515,8 +503,6 @@ export default function RiffMaster() {
         setCodeInput={setCodeInput}
         error={error}
         onSolo={startSolo}
-        demoSettings={demoSettings}
-        onDemo={startDemo}
         onCreate={() => enterRoom(randomCode())}
         onJoin={() => {
           const code = codeInput.trim().toUpperCase();
@@ -587,7 +573,6 @@ export default function RiffMaster() {
             rounds={rounds}
             isHost={isHost}
             onRematch={() => startGame()}
-            onSettings={demo ? leaveRoom : null}
           />
         )
       )}
@@ -614,10 +599,7 @@ function rankPlayers(players, progress, finishes) {
     });
 }
 
-function Home({ name, setName, codeInput, setCodeInput, error, onSolo, demoSettings, onDemo, onCreate, onJoin }) {
-  const [demoOpen, setDemoOpen] = useState(false);
-  const [draft, setDraft] = useState(demoSettings);
-
+function Home({ name, setName, codeInput, setCodeInput, error, onSolo, onCreate, onJoin }) {
   return (
     <div style={{ ...styles.page, justifyContent: 'center' }}>
       <header style={styles.center}>
@@ -673,49 +655,6 @@ function Home({ name, setName, codeInput, setCodeInput, error, onSolo, demoSetti
         {error && <p style={styles.error}>{error}</p>}
       </div>
 
-      <div style={styles.card}>
-        <button
-          type="button"
-          style={{ ...styles.linkButton, textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}
-          onClick={() => setDemoOpen((o) => !o)}
-          aria-expanded={demoOpen}
-        >
-          <span>Demo race vs simulated friends</span>
-          <span>{demoOpen ? '−' : '+'}</span>
-        </button>
-        {demoOpen && (
-          <>
-            <Segmented
-              label="Friends"
-              value={draft.friends}
-              options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))}
-              onChange={(friends) => setDraft((d) => ({ ...d, friends }))}
-            />
-            <Segmented
-              label="Their skill"
-              value={draft.skill}
-              options={Object.keys(SKILLS).map((k) => ({ value: k, label: k[0].toUpperCase() + k.slice(1) }))}
-              onChange={(skill) => setDraft((d) => ({ ...d, skill }))}
-            />
-            <Segmented
-              label="Rounds to win"
-              value={draft.rounds}
-              options={[5, 8, 10, 12, 15].map((n) => ({ value: n, label: String(n) }))}
-              onChange={(rounds) => setDraft((d) => ({ ...d, rounds }))}
-            />
-            <Segmented
-              label="Riff speed"
-              value={draft.tempo}
-              options={Object.keys(TEMPOS).map((k) => ({ value: k, label: k[0].toUpperCase() + k.slice(1) }))}
-              onChange={(tempo) => setDraft((d) => ({ ...d, tempo }))}
-            />
-            <button type="button" style={{ ...styles.primaryButton, width: '100%' }} onClick={() => onDemo(draft)}>
-              Start demo race
-            </button>
-          </>
-        )}
-      </div>
-
       {!isOnline && (
         <p style={styles.hint}>
           Test mode: rooms only link tabs in this browser until Supabase is configured.
@@ -725,26 +664,34 @@ function Home({ name, setName, codeInput, setCodeInput, error, onSolo, demoSetti
   );
 }
 
-function Segmented({ label, value, options, onChange }) {
+function DemoHome({ name, setName, onStart }) {
+  const c = DEMO_CONFIG;
   return (
-    <div style={styles.label}>
-      {label}
-      <div style={styles.segmented} role="radiogroup" aria-label={label}>
-        {options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            role="radio"
-            aria-checked={o.value === value}
-            onClick={() => onChange(o.value)}
-            style={{
-              ...styles.segment,
-              ...(o.value === value ? styles.segmentOn : null),
-            }}
-          >
-            {o.label}
-          </button>
-        ))}
+    <div style={{ ...styles.page, justifyContent: 'center' }}>
+      <header style={styles.center}>
+        <h1 style={styles.title}>Riff Master</h1>
+        <p style={styles.subtitle}>Demo race · test build</p>
+      </header>
+
+      <div style={styles.card}>
+        <label style={styles.label}>
+          Your name
+          <input
+            style={styles.input}
+            value={name}
+            maxLength={16}
+            autoComplete="nickname"
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Jess"
+          />
+        </label>
+        <p style={{ ...styles.hint, textAlign: 'left' }}>
+          {c.friends} simulated {c.friends === 1 ? 'friend' : 'friends'} · {c.skill} skill · first to {c.rounds} rounds ·{' '}
+          {c.tempo} speed
+        </p>
+        <button type="button" style={{ ...styles.primaryButton, width: '100%' }} onClick={onStart}>
+          Start demo race
+        </button>
       </div>
     </div>
   );
@@ -897,7 +844,7 @@ function SoloResults({ ms, best, newBest, onRematch }) {
   );
 }
 
-function Results({ standings, meId, rounds, isHost, onRematch, onSettings }) {
+function Results({ standings, meId, rounds, isHost, onRematch }) {
   const winner = standings[0];
   return (
     <div style={styles.lobby}>
@@ -924,11 +871,6 @@ function Results({ standings, meId, rounds, isHost, onRematch, onSettings }) {
         </button>
       ) : (
         <p style={styles.hint}>Waiting for the host to start a rematch…</p>
-      )}
-      {onSettings && (
-        <button type="button" style={styles.linkButton} onClick={onSettings}>
-          Change demo settings
-        </button>
       )}
     </div>
   );
@@ -1040,17 +982,6 @@ const styles = {
   bar: { height: 8, background: colors.surfaceRaised, borderRadius: 999, overflow: 'hidden' },
   barFill: { height: '100%', background: colors.accent, borderRadius: 999, transition: 'width 200ms' },
   slipTag: { color: colors.danger, fontWeight: 600 },
-  segmented: { display: 'flex', gap: 6 },
-  segment: {
-    ...button,
-    flex: 1,
-    padding: '10px 4px',
-    fontSize: 14,
-    background: colors.surfaceRaised,
-    color: colors.textMuted,
-    border: `1px solid ${colors.border}`,
-  },
-  segmentOn: { background: colors.accent, color: colors.onAccent, border: `1px solid ${colors.accent}` },
   scoreCount: { color: colors.textMuted, fontVariantNumeric: 'tabular-nums' },
   winner: { margin: '4px 0 0', fontSize: 32 },
 };
