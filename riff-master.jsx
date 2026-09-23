@@ -698,8 +698,12 @@ function DemoHome({ name, setName, onStart }) {
   );
 }
 
+// A race needs someone to race: Start stays locked until a friend is in the room.
+const MIN_PLAYERS = 2;
+
 function Lobby({ room, players, hostId, meId, isHost, onStart }) {
   const [copied, setCopied] = useState(false);
+  const canStart = players.length >= MIN_PLAYERS;
 
   const share = async () => {
     const url = window.location.href;
@@ -737,12 +741,23 @@ function Lobby({ room, players, hostId, meId, isHost, onStart }) {
               {p.id === hostId && <span style={styles.badge}>Host</span>}
             </li>
           ))}
+          {!canStart && (
+            <li style={{ ...styles.playerRow, ...styles.muted }}>
+              <span>Waiting for a friend to join…</span>
+              <span style={styles.pulse} aria-hidden="true" />
+            </li>
+          )}
         </ul>
       </div>
 
       {isHost ? (
-        <button type="button" style={styles.primaryButton} onClick={onStart}>
-          Start race
+        <button
+          type="button"
+          style={{ ...styles.primaryButton, ...(canStart ? null : styles.buttonDisabled) }}
+          disabled={!canStart}
+          onClick={() => canStart && onStart()}
+        >
+          {canStart ? 'Start race' : 'Invite a friend to start'}
         </button>
       ) : (
         <p style={styles.hint}>Waiting for the host to start…</p>
@@ -982,6 +997,14 @@ const styles = {
   scoreName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   bar: { height: 8, background: colors.surfaceRaised, borderRadius: 999, overflow: 'hidden' },
   barFill: { height: '100%', background: colors.accent, borderRadius: 999, transition: 'width 200ms' },
+  buttonDisabled: { opacity: 0.45, cursor: 'not-allowed' },
+  pulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    background: colors.accent,
+    animation: 'riff-pulse 1.2s ease-in-out infinite',
+  },
   slipTag: { color: colors.danger, fontWeight: 600 },
   scoreCount: { color: colors.textMuted, fontVariantNumeric: 'tabular-nums' },
   winner: { margin: '4px 0 0', fontSize: 32 },
