@@ -16,10 +16,10 @@ const colors = {
   danger: '#E39B87',
 };
 
-// Give the browser more patience than the server-side cap (lib/digest.js)
-// so a slow-but-legitimate multi-source search isn't killed client-side
-// before the server's own timeout has a chance to respond.
-const PULL_TIMEOUT_MS = 120_000;
+// A pull now returns almost instantly (it just starts a background job) and
+// the page polls for the result, so there's no long request to time out —
+// just how often to check back in.
+const POLL_INTERVAL_MS = 3_000;
 
 async function api(path, options = {}) {
   const { timeoutMs = 20_000, signal, ...init } = options;
@@ -74,7 +74,9 @@ export default function FintechDigest() {
   const [phase, setPhase] = useState('idle');
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(null);
-  const pullRef = useRef(null);
+  // Holds { cancelled, timer } for the in-flight poll loop, so cancelling
+  // or unmounting can stop the next check without an in-flight fetch to abort.
+  const pollRef = useRef(null);
 
   const [readerDigest, setReaderDigest] = useState(null);
   const [pageIndex, setPageIndex] = useState(0);
@@ -165,28 +167,58 @@ export default function FintechDigest() {
   async function pull() {
     setError(null);
     setPhase('pulling');
-    const controller = new AbortController();
-    pullRef.current = controller;
 
     try {
-      const data = await api('/api/digest', {
-        method: 'POST',
-        timeoutMs: PULL_TIMEOUT_MS,
-        signal: controller.signal,
-      });
-      setHistory((prev) => [data.digest, ...prev]);
-      openReader(data.digest);
+      const data = await api('/api/digest', { method: 'POST' });
+      const token = { cancelled: false, timer: null };
+      pollRef.current = token;
+      pollDigest(data.digest.id, token);
     } catch (e) {
-      if (!e.cancelled) setError(e.message);
+      setError(e.message);
       setPhase('idle');
-    } finally {
-      pullRef.current = null;
+    }
+  }
+
+  async function pollDigest(id, token) {
+    if (token.cancelled) return;
+    try {
+      const data = await api(`/api/digests/${id}`);
+      if (token.cancelled) return;
+      if (data.digest.status === 'ready') {
+        setHistory((prev) => [data.digest, ...prev]);
+        openReader(data.digest);
+        return;
+      }
+      if (data.digest.status === 'error') {
+        setError(data.digest.error || 'The search failed. Try pulling again.');
+        setPhase('idle');
+        return;
+      }
+      token.timer = setTimeout(() => pollDigest(id, token), POLL_INTERVAL_MS);
+    } catch (e) {
+      if (token.cancelled) return;
+      setError(e.message);
+      setPhase('idle');
     }
   }
 
   function cancelPull() {
-    pullRef.current?.abort();
+    if (pollRef.current) {
+      pollRef.current.cancelled = true;
+      clearTimeout(pollRef.current.timer);
+    }
+    setPhase('idle');
   }
+
+  // Stop polling if the page is closed mid-pull.
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        pollRef.current.cancelled = true;
+        clearTimeout(pollRef.current.timer);
+      }
+    };
+  }, []);
 
   async function removeDigest(id) {
     const previous = history;
@@ -495,7 +527,7 @@ function PullingModal({ elapsed, onCancel }) {
           />
         </div>
         <div role="status" style={{ fontSize: '13px', color: colors.textMuted }}>
-          {elapsed}s — this can take up to a minute
+          {elapsed}s — safe to leave this open, it'll keep searching even if it takes a bit
         </div>
 
         <button
