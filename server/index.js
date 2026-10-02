@@ -12,8 +12,8 @@ import {
   rateEpisode,
   storeStatus,
 } from '../lib/store.js';
-import { generateDigest, isTimeout as isDigestTimeout } from '../lib/digest.js';
-import { deleteDigest, digestStoreStatus, insertDigest, listDigests } from '../lib/digestStore.js';
+import { runDigestJob } from '../lib/digest.js';
+import { deleteDigest, digestStoreStatus, getDigest, insertPendingDigest, listDigests } from '../lib/digestStore.js';
 
 const missing = ['ANTHROPIC_API_KEY', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'].filter(
   (k) => !process.env[k]
@@ -139,40 +139,18 @@ app.get('/api/digest-status', async (_req, res) => {
   res.status(status.ok ? 200 : 500).json(status);
 });
 
+// Express has no request time limit, unlike Netlify's functions, so there's
+// no need for a separate background process locally: just don't await the
+// job before responding, so the client gets the pending row right away and
+// starts polling while the search keeps running in this same process.
 app.post('/api/digest', async (_req, res) => {
-  res.status(200);
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.write(' ');
-  const heartbeat = setInterval(() => {
-    try {
-      if (!res.writableEnded) res.write(' ');
-    } catch {
-      /* client disconnected */
-    }
-  }, 4000);
-
   try {
-    // Cancel the upstream search if the browser gives up first.
-    const digest = await generateDigest((abort) => {
-      res.on('close', () => {
-        if (!res.writableEnded) abort();
-      });
-    });
-    res.end(JSON.stringify({ digest: await insertDigest(digest) }));
+    const pending = await insertPendingDigest();
+    res.json({ digest: pending });
+    runDigestJob(pending.id).catch((err) => console.error('digest job (fire-and-forget) failed', err));
   } catch (err) {
     console.error('POST /api/digest', err);
-    if (res.writableEnded) return;
-    res.end(
-      JSON.stringify({
-        error: isDigestTimeout(err)
-          ? 'The web search took too long. Try pulling again.'
-          : err.message ?? 'Digest failed',
-      })
-    );
-  } finally {
-    clearInterval(heartbeat);
+    res.status(500).json({ error: err.message ?? 'Could not start the search.' });
   }
 });
 
@@ -181,6 +159,15 @@ app.get('/api/digests', async (_req, res) => {
     res.json({ digests: await listDigests() });
   } catch (err) {
     console.error('GET /api/digests', err);
+    res.status(500).json({ error: err.message ?? 'Fetch failed' });
+  }
+});
+
+app.get('/api/digests/:id', async (req, res) => {
+  try {
+    res.json({ digest: await getDigest(req.params.id) });
+  } catch (err) {
+    console.error('GET /api/digests/:id', err);
     res.status(500).json({ error: err.message ?? 'Fetch failed' });
   }
 });
